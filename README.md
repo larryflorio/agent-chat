@@ -38,6 +38,8 @@ Runtime state is created lazily on first use:
 - `.chatroom/cursors.json`
 - `.chatroom/summaries.jsonl`
 
+By default, the server and monitor resolve the chatroom root from the directory containing their script files. If you need to point them somewhere else, set `CHATROOM_ROOT=/absolute/path/to/repo`.
+
 The server also adds `.chatroom/` to `.gitignore` if it is not already present.
 
 ## Run It
@@ -100,8 +102,9 @@ python3 chatroom_monitor.py
 Important:
 
 - you do not normally run `chatroom_mcp_server.py` yourself
-- Claude Code and Codex each launch their own `chatroom` MCP server subprocess from the repo root
+- Claude Code and Codex each launch their own `chatroom` MCP server subprocess
 - the monitor is read-only and only displays the shared chat state
+- if your MCP client does not launch from the repository root, use an absolute path for `chatroom_mcp_server.py` or set `CHATROOM_ROOT`
 
 Typical flow:
 
@@ -136,6 +139,8 @@ Add this to `.claude/settings.json`:
 }
 ```
 
+If Claude launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT` in the launch environment.
+
 ## Configure Codex CLI
 
 Add this to `.codex/config.toml`:
@@ -146,11 +151,15 @@ command = "python3"
 args = ["chatroom_mcp_server.py"]
 ```
 
+If Codex launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT`.
+
 ## Available Tools
 
 ### `join`
 
 Registers an agent as active.
+
+Participant names are exclusive across live server processes. Rejoining with the same name is allowed only from the same process; a second live process using that name is rejected.
 
 Parameters:
 
@@ -231,6 +240,8 @@ Example:
 
 Sets the unread cursor for a participant to a specific message ID.
 
+Cursor updates are monotonic: the stored cursor never moves backwards.
+
 ### `read_unread`
 
 Reads messages visible to a participant after that participant's cursor.
@@ -241,7 +252,7 @@ Parameters:
 - `limit: int = 50`
 - `mark_read: bool = true`
 
-If `mark_read` is true, the cursor advances to the highest returned message ID.
+If `mark_read` is true, the cursor advances to the highest returned message ID and never regresses.
 
 ### `write_summary`
 
@@ -280,6 +291,8 @@ Returns a compact orientation payload for a new or resumed session:
 ## Operational Notes
 
 - Message IDs are assigned under an exclusive file lock, so concurrent writers still get unique sequential IDs.
+- Cursor writes are monotonic, so stale callers cannot move unread state backwards.
+- Participant names are treated as single-owner identities across live processes; duplicate live joins are rejected.
 - Participant cleanup on process exit is best-effort via `atexit`. Hard kills can leave stale participants behind.
 - `get_status` is not an atomic snapshot across both files. Counts can reflect slightly different moments.
 - Input strings are trimmed before validation and storage.
@@ -292,7 +305,13 @@ Returns a compact orientation payload for a new or resumed session:
 Syntax check:
 
 ```bash
-python3 -m py_compile chatroom_mcp_server.py
+python3 -m py_compile chatroom_mcp_server.py chatroom_monitor.py
+```
+
+Regression tests:
+
+```bash
+python3 -m pytest -q
 ```
 
 Manual run check:

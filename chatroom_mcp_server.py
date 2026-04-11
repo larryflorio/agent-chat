@@ -27,7 +27,16 @@ import fcntl
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("chatroom")
-ROOT = Path.cwd()
+
+
+def resolve_root() -> Path:
+    override = os.environ.get("CHATROOM_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path(__file__).resolve().parent
+
+
+ROOT = resolve_root()
 CHATROOM_DIR = ROOT / ".chatroom"
 MESSAGES_PATH = CHATROOM_DIR / "messages.jsonl"
 PARTICIPANTS_PATH = CHATROOM_DIR / "participants.json"
@@ -89,7 +98,7 @@ def ensure_json_file(path: Path) -> None:
 def ensure_state() -> None:
     CHATROOM_DIR.mkdir(exist_ok=True)
     for path in (MESSAGES_PATH, SUMMARIES_PATH):
-        with path.open("a", encoding="utf-8"):
+        with locked_file(path, "a+", fcntl.LOCK_EX):
             pass
     for path in (PARTICIPANTS_PATH, CURSORS_PATH):
         ensure_json_file(path)
@@ -188,7 +197,10 @@ def set_cursor_value(name: str, message_id: int) -> int:
     return update_json_map(
         CURSORS_PATH,
         "cursors.json",
-        lambda data: data.__setitem__(name, message_id) or message_id,
+        lambda data: (
+            data.__setitem__(name, max(message_id, int(data.get(name, 0) or 0)))
+            or data[name]
+        ),
     )
 
 
@@ -225,22 +237,19 @@ def join(name: str, role: str = "general") -> list[dict[str, str]]:
     role = strip_text(role, "role")
     ensure_state()
     now = utc_now()
-    participants = update_json_map(
-        PARTICIPANTS_PATH,
-        "participants.json",
-        lambda data: (
-            data.__setitem__(
-                name,
-                {
-                    "name": name,
-                    "role": role,
-                    "joined_at": data.get(name, {}).get("joined_at", now),
-                    "last_seen": now,
-                },
-            )
-            or sort_participants(data)
-        ),
-    )
+    def update_participants(data: dict[str, dict[str, str]]) -> list[dict[str, str]]:
+        existing = data.get(name)
+        if existing and name not in ACTIVE_NAMES:
+            raise ValueError(f"participant {name!r} is already active; choose a different name or remove the stale participant")
+        data[name] = {
+            "name": name,
+            "role": role,
+            "joined_at": (existing or {}).get("joined_at", now),
+            "last_seen": now,
+        }
+        return sort_participants(data)
+
+    participants = update_json_map(PARTICIPANTS_PATH, "participants.json", update_participants)
     ACTIVE_NAMES.add(name)
     return participants
 

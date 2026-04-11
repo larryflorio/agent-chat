@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import textwrap
 import time
@@ -11,7 +12,15 @@ from typing import Any, Iterator
 
 import fcntl
 
-ROOT = Path.cwd()
+
+def resolve_root() -> Path:
+    override = os.environ.get("CHATROOM_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path(__file__).resolve().parent
+
+
+ROOT = resolve_root()
 CHATROOM_DIR = ROOT / ".chatroom"
 MESSAGES_PATH = CHATROOM_DIR / "messages.jsonl"
 PARTICIPANTS_PATH = CHATROOM_DIR / "participants.json"

@@ -23,11 +23,11 @@ The server is local-only. It is not a network service.
 
 ## Required Output
 
-Produce exactly one runtime file in the repository root:
+Produce the MCP server runtime in the repository root as:
 
 - `chatroom_mcp_server.py`
 
-Other repository files such as documentation may exist, but the runtime implementation itself must remain single-file.
+Other repository files such as documentation, tests, and optional read-only helper tooling may exist, but the MCP server runtime itself must remain single-file.
 
 ## Technology Constraints
 
@@ -47,7 +47,12 @@ Other repository files such as documentation may exist, but the runtime implemen
 
 ## Repository-Relative State
 
-All runtime state lives in `.chatroom/` at the current working directory where the server process is launched.
+All runtime state lives in `.chatroom/` under the resolved repository root.
+
+Repository root resolution:
+
+- if `CHATROOM_ROOT` is set, use that path
+- otherwise, use the directory containing `chatroom_mcp_server.py`
 
 Required files:
 
@@ -186,7 +191,8 @@ No alternative ID scheme is permitted in this version.
 Participant identity is the stripped `name` string supplied to tools.
 
 - A `join` for a new name creates a participant record
-- A `join` for an existing name updates `role` and `last_seen`
+- A `join` for an existing name from the same process updates `role` and `last_seen`
+- A `join` for an existing name from a different process must be rejected
 - A rejoin preserves `joined_at` if the name is already active
 
 The process must register a best-effort `atexit` handler that calls `leave(name)` for each participant name joined by that process.
@@ -243,9 +249,10 @@ Behavior:
 1. ensure state exists
 2. acquire `LOCK_EX` on `participants.json`
 3. create or update the participant record
-4. release lock
-5. register a best-effort `atexit` leave handler for `name` in the current process
-6. return the full participant list sorted by `name`
+4. if the name is already active in a different process, reject the join
+5. release lock
+6. register a best-effort `atexit` leave handler for `name` in the current process
+7. return the full participant list sorted by `name`
 
 `join` must not write a system message.
 
@@ -377,6 +384,7 @@ Behavior:
 2. validate `message_id >= 0`
 3. reject `message_id` values greater than the current latest message ID
 4. write the cursor under `LOCK_EX`
+5. never move the stored cursor backwards; the stored value becomes `max(existing_cursor, message_id)`
 
 Return shape:
 
@@ -398,7 +406,8 @@ Behavior:
 2. read the participant cursor; missing cursor means `0`
 3. read messages visible to that participant with `id > cursor`
 4. apply participant filtering before `limit`
-5. if `mark_read` is true and at least one message is returned, set the cursor to the highest returned message ID
+5. if `mark_read` is true and at least one message is returned, advance the cursor to the highest returned message ID
+6. cursor updates performed by this tool must also be monotonic
 
 Return shape:
 

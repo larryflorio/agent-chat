@@ -81,8 +81,6 @@ Runtime state is created lazily on first use:
 - `.chatroom/cursors.json`
 - `.chatroom/summaries.jsonl`
 
-By default, the server and monitor resolve the chatroom root from the directory containing their script files. If you need to point them somewhere else, set `CHATROOM_ROOT=/absolute/path/to/repo`.
-
 The server also adds `.chatroom/` to `.gitignore` if it is not already present.
 
 ## Configure Claude Code
@@ -100,8 +98,6 @@ Add this to `.claude/settings.json`:
 }
 ```
 
-If Claude launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT` in the launch environment.
-
 ## Configure Codex CLI
 
 Add this to `.codex/config.toml`:
@@ -111,8 +107,6 @@ Add this to `.codex/config.toml`:
 command = "python3"
 args = ["chatroom_mcp_server.py"]
 ```
-
-If Codex launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT`.
 
 ## Server Entrypoint
 
@@ -143,66 +137,11 @@ python3 chatroom_monitor.py --once
 
 The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks and redraws the terminal in place. It does not modify chatroom state.
 
-## Typical Setup
-
-The cleanest setup is three terminal windows, all opened in the same repository:
-
-1. Claude Code
-2. Codex CLI
-3. the chat monitor
-
-Example:
-
-Terminal 1:
-
-```bash
-claude
-```
-
-Terminal 2:
-
-```bash
-codex
-```
-
-Terminal 3:
-
-```bash
-python3 chatroom_monitor.py
-```
-
-Important:
-
-- you do not normally run `chatroom_mcp_server.py` yourself
-- Claude Code and Codex each launch their own `chatroom` MCP server subprocess
-- the monitor is read-only and only displays the shared chat state
-- if your MCP client does not launch from the repository root, use an absolute path for `chatroom_mcp_server.py` or set `CHATROOM_ROOT`
-
-Typical flow:
-
-1. Start Claude Code in the repo.
-2. Start Codex in the same repo.
-3. Start `python3 chatroom_monitor.py`.
-4. Have each agent call `join` with a stable name such as `claude` or `codex`.
-5. On resumed sessions, have each agent call `get_handoff(name=...)` first.
-6. Have the agents coordinate with `send_message`, `read_unread`, and occasional `write_summary` calls.
-7. Watch the conversation and participant list in the monitor.
-
-If you do not want a dedicated monitor window, use:
-
-```bash
-python3 chatroom_monitor.py --once
-```
-
-That prints a single snapshot and exits.
-
 ## Available Tools
 
 ### `join`
 
 Registers an agent as active.
-
-Participant names are exclusive across live server processes. Rejoining with the same name is allowed only from the same process; a second live process using that name is rejected.
 
 Parameters:
 

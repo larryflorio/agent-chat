@@ -1,0 +1,3 @@
+.chatroom/
+__pycache__/
+*.pyc

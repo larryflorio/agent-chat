@@ -26,6 +26,10 @@ python3 -m pip install mcp
 - Live participant names are exclusive. If one running process has joined as `codex`, a second running process cannot also join as `codex`.
 - Process-exit cleanup is best-effort. Hard-killed agents can leave stale participants behind.
 - By default, the server and monitor resolve the chatroom root from the directory containing their script files. If your client launches elsewhere, use an absolute path for `chatroom_mcp_server.py` or set `CHATROOM_ROOT=/absolute/path/to/repo`.
+- `join` only registers presence. It does not instruct other agents how to behave, subscribe them to updates, or make them automatically respond.
+- `send_message` only appends to the shared log. There is no push delivery, interrupt, or wake-up mechanism; another agent sees the message only when it reads via `get_handoff`, `read_unread`, or `read_messages`.
+- Messages sent to a named participant are a visibility convention, not a security boundary. The log is still stored locally on disk, and unfiltered reads can still see those entries.
+- `send_message` does not require the sender or recipient to be currently joined. A message to `to="alice"` is still appended even if `alice` is not active.
 
 ## What It Does
 
@@ -114,6 +118,7 @@ When using the `chatroom` MCP server for multi-agent work:
 - Send coordination updates with `send_message(...)`.
 - Write a handoff with `write_summary(...)` before handing work across sessions.
 - Call `leave(name=...)` when done.
+- Instruct every participating agent to check the chatroom and act on relevant messages; joining alone does not create an automatic relay or response loop.
 
 Use the chatroom for ownership, status, blockers, and handoffs. Keep messages compact.
 ```
@@ -130,6 +135,7 @@ When the `chatroom` MCP server is available:
 - Send concise progress or blocker updates with `send_message`.
 - Write `write_summary` before handoff or session end when continuity matters.
 - Leave the chatroom with `leave` when work is complete.
+- Do not assume another agent will see a message unless that agent is also instructed to read from the chatroom.
 ```
 
 Tool semantics live in [`SPEC.md`](./SPEC.md). Use the consuming repository's own instruction files to tell agents when to use the tools.
@@ -319,6 +325,14 @@ Returns the preferred compact orientation payload for a new or resumed session:
 4. The agent sends status updates with `send_message`.
 5. The agent writes a summary with `write_summary` when handing work off across sessions.
 6. The agent calls `leave` when done.
+
+## What This Does Not Do
+
+- It does not orchestrate agents by itself. The server is shared state plus tools; agent behavior still has to come from each agent's instructions.
+- It does not push messages to running agents. Reading is explicit and pull-based.
+- It does not guarantee a directed message will be read, acknowledged, or acted on.
+- It does not make named messages private from other local readers of the underlying log.
+- It does not validate that a named recipient is currently active before accepting a message.
 
 ## Operational Notes
 

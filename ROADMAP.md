@@ -3,8 +3,8 @@
 ## Near-Term Hardening
 
 - Add a small maintenance path for clearing stale participant records without manual file edits.
-- Expand tests around concurrent joins, cursor advancement, and crash-recovery edge cases.
-- Tighten operational docs for launcher configuration and recovery from stale presence state.
+- Add deeper crash-recovery and concurrent-join coverage beyond the current concurrency smoke test.
+- Decide whether stale-presence recovery remains explicit/manual in v1 or gets a dedicated maintenance tool before v2.
 
 ## Future: True Multi-Session Identity
 

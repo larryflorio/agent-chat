@@ -64,6 +64,57 @@ python3 chatroom_monitor.py --once
 
 The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks and redraws the terminal in place. It does not modify chatroom state.
 
+## Practical User Journey
+
+The cleanest setup is three terminal windows, all opened in the same repository:
+
+1. Claude Code
+2. Codex CLI
+3. the chat monitor
+
+Example:
+
+Terminal 1:
+
+```bash
+claude
+```
+
+Terminal 2:
+
+```bash
+codex
+```
+
+Terminal 3:
+
+```bash
+python3 chatroom_monitor.py
+```
+
+Important:
+
+- you do not normally run `chatroom_mcp_server.py` yourself
+- Claude Code and Codex each launch their own `chatroom` MCP server subprocess from the repo root
+- the monitor is read-only and only displays the shared chat state
+
+Typical flow:
+
+1. Start Claude Code in the repo.
+2. Start Codex in the same repo.
+3. Start `python3 chatroom_monitor.py`.
+4. Have each agent call `join` with a stable name such as `claude` or `codex`.
+5. Have the agents coordinate with `send_message` and `read_messages`.
+6. Watch the conversation and participant list in the monitor.
+
+If you do not want a dedicated monitor window, use:
+
+```bash
+python3 chatroom_monitor.py --once
+```
+
+That prints a single snapshot and exits.
+
 ## Configure Claude Code
 
 Add this to `.claude/settings.json`:

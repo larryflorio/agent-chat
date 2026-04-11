@@ -13,39 +13,13 @@ python3 -m pip install mcp
 ```
 
 2. Configure your MCP client to launch `chatroom_mcp_server.py`.
+   See [Configure Claude Code](#configure-claude-code) or [Configure Codex CLI](#configure-codex-cli).
 
-Claude Code:
-
-```json
-{
-  "mcpServers": {
-    "chatroom": {
-      "command": "python3",
-      "args": ["chatroom_mcp_server.py"]
-    }
-  }
-}
-```
-
-Codex CLI:
-
-```toml
-[mcp_servers.chatroom]
-command = "python3"
-args = ["chatroom_mcp_server.py"]
-```
-
-3. Start Claude Code and Codex in the same repository.
+3. Start your agents in the same repository.
 
 4. Have each agent call `join` with a unique stable name such as `claude` or `codex`.
 
 5. On resumed sessions, call `get_handoff(name=...)` before replaying chat history.
-
-6. Optionally run the read-only monitor:
-
-```bash
-python3 chatroom_monitor.py
-```
 
 ## Rules Of The Road
 
@@ -83,7 +57,9 @@ Runtime state is created lazily on first use:
 
 The server also adds `.chatroom/` to `.gitignore` if it is not already present.
 
-## Configure Claude Code
+## Configuration
+
+### Configure Claude Code
 
 Add this to `.claude/settings.json`:
 
@@ -98,7 +74,7 @@ Add this to `.claude/settings.json`:
 }
 ```
 
-## Configure Codex CLI
+### Configure Codex CLI
 
 Add this to `.codex/config.toml`:
 
@@ -108,7 +84,7 @@ command = "python3"
 args = ["chatroom_mcp_server.py"]
 ```
 
-## Server Entrypoint
+### Server Entrypoint
 
 For direct debugging from the repository root:
 
@@ -118,7 +94,9 @@ python3 chatroom_mcp_server.py
 
 The server uses stdio transport, so you normally do not run it by hand for long. Your MCP client should launch it as a subprocess.
 
-## Terminal Monitor
+## Monitor / Debugging
+
+### Terminal Monitor
 
 Run the read-only terminal monitor from the repository root:
 
@@ -136,6 +114,26 @@ python3 chatroom_monitor.py --once
 ```
 
 The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks and redraws the terminal in place. It does not modify chatroom state.
+
+### Quick Check
+
+Syntax check:
+
+```bash
+python3 -m py_compile chatroom_mcp_server.py chatroom_monitor.py
+```
+
+Regression tests:
+
+```bash
+python3 -m pytest -q
+```
+
+Manual run check:
+
+```bash
+python3 -c "import chatroom_mcp_server as s; print(s.join('alice')); print(s.send_message('alice', 'hello')); print(s.read_unread('alice')); print(s.write_summary('alice', 'Initial handoff')); print(s.get_handoff('alice')); print(s.leave('alice'))"
+```
 
 ## Available Tools
 
@@ -281,26 +279,6 @@ Returns the preferred compact orientation payload for a new or resumed session:
 - Read-oriented tools enforce a hard maximum of `100` messages per call.
 - Context control is handled by cursors, summaries, and `get_handoff`. The message log is still durable on disk.
 - This version does not rotate `messages.jsonl`; rotation would require changing the current ID-allocation contract.
-
-## Quick Check
-
-Syntax check:
-
-```bash
-python3 -m py_compile chatroom_mcp_server.py chatroom_monitor.py
-```
-
-Regression tests:
-
-```bash
-python3 -m pytest -q
-```
-
-Manual run check:
-
-```bash
-python3 -c "import chatroom_mcp_server as s; print(s.join('alice')); print(s.send_message('alice', 'hello')); print(s.read_unread('alice')); print(s.write_summary('alice', 'Initial handoff')); print(s.get_handoff('alice')); print(s.leave('alice'))"
-```
 
 ## Project Files
 

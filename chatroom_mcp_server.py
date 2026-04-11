@@ -233,6 +233,7 @@ atexit.register(cleanup)
 
 @mcp.tool()
 def join(name: str, role: str = "general") -> list[dict[str, str]]:
+    """Register this agent as active in the shared chatroom."""
     name = require_text(name, "name")
     role = strip_text(role, "role")
     ensure_state()
@@ -256,11 +257,13 @@ def join(name: str, role: str = "general") -> list[dict[str, str]]:
 
 @mcp.tool()
 def leave(name: str) -> dict[str, bool]:
+    """Remove this agent from active participants and emit a system leave message."""
     return {"left": leave_internal(require_text(name, "name"))}
 
 
 @mcp.tool()
 def send_message(name: str, content: str, to: str = "all") -> dict[str, int]:
+    """Append a broadcast or directed message to the shared message log."""
     ensure_state()
     return {
         "id": append_jsonl(
@@ -277,6 +280,7 @@ def send_message(name: str, content: str, to: str = "all") -> dict[str, int]:
 
 @mcp.tool()
 def read_messages(since_id: int = 0, limit: int = 50, participant: str = "") -> list[dict[str, Any]]:
+    """Read recent messages after a given id, optionally filtered by recipient visibility."""
     if since_id < 0:
         raise ValueError("since_id must be >= 0")
     ensure_state()
@@ -288,12 +292,14 @@ def read_messages(since_id: int = 0, limit: int = 50, participant: str = "") -> 
 
 @mcp.tool()
 def list_participants() -> list[dict[str, str]]:
+    """List active chatroom participants sorted by name."""
     ensure_state()
     return sort_participants(load_json_map(PARTICIPANTS_PATH, "participants.json"))
 
 
 @mcp.tool()
 def get_status() -> dict[str, Any]:
+    """Return aggregate participant and message status for the chatroom."""
     ensure_state()
     participant_count = len(load_json_map(PARTICIPANTS_PATH, "participants.json"))
     _, latest_id = scan_messages()
@@ -313,6 +319,7 @@ def get_status() -> dict[str, Any]:
 
 @mcp.tool()
 def get_cursor(name: str) -> dict[str, int | str]:
+    """Return the stored unread cursor for a participant."""
     ensure_state()
     name = require_text(name, "name")
     return {"name": name, "last_read_id": get_cursor_value(name)}
@@ -320,6 +327,7 @@ def get_cursor(name: str) -> dict[str, int | str]:
 
 @mcp.tool()
 def set_cursor(name: str, message_id: int) -> dict[str, int | str]:
+    """Advance a participant cursor to a specific message id without allowing regression."""
     ensure_state()
     name = require_text(name, "name")
     if message_id < 0:
@@ -332,6 +340,7 @@ def set_cursor(name: str, message_id: int) -> dict[str, int | str]:
 
 @mcp.tool()
 def read_unread(name: str, limit: int = 50, mark_read: bool = True) -> dict[str, Any]:
+    """Read messages after this participant's cursor and optionally advance it."""
     ensure_state()
     name = require_text(name, "name")
     limit = require_window(limit, "limit")
@@ -345,6 +354,7 @@ def read_unread(name: str, limit: int = 50, mark_read: bool = True) -> dict[str,
 
 @mcp.tool()
 def write_summary(name: str, content: str, scope: str = "all") -> dict[str, int]:
+    """Persist a summary record for cross-session handoff."""
     ensure_state()
     return {
         "id": append_jsonl(
@@ -361,12 +371,14 @@ def write_summary(name: str, content: str, scope: str = "all") -> dict[str, int]
 
 @mcp.tool()
 def read_latest_summary(scope: str = "all") -> dict[str, Any] | None:
+    """Return the latest summary whose scope exactly matches the requested scope."""
     ensure_state()
     return latest_summary(require_text(scope, "scope"))
 
 
 @mcp.tool()
 def get_handoff(name: str = "", recent_limit: int = 10) -> dict[str, Any]:
+    """Return a compact orientation payload for a new or resumed agent session."""
     ensure_state()
     name = strip_text(name, "name")
     recent_limit = require_window(recent_limit, "recent_limit")

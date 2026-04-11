@@ -92,6 +92,48 @@ command = "python3"
 args = ["chatroom_mcp_server.py"]
 ```
 
+## Downstream Repo Instructions
+
+If you install this MCP server into some other repository, agents in that repository will not automatically read this repository's `AGENTS.md`. They will follow the consuming repository's own instruction files.
+
+For downstream use:
+
+1. Install the MCP server in the consuming repository.
+2. Add a short chatroom workflow section to that repository's agent instructions.
+
+Suggested `AGENTS.md` snippet for a consuming repository:
+
+```md
+## Chatroom Coordination
+
+When using the `chatroom` MCP server for multi-agent work:
+
+- Call `join(name=...)` when starting work.
+- On resumed work, call `get_handoff(name=...)`.
+- Prefer `read_unread(name=...)` or the latest summary over replaying the full log.
+- Send coordination updates with `send_message(...)`.
+- Write a handoff with `write_summary(...)` before handing work across sessions.
+- Call `leave(name=...)` when done.
+
+Use the chatroom for ownership, status, blockers, and handoffs. Keep messages compact.
+```
+
+Suggested `CLAUDE.md` snippet for a consuming repository:
+
+```md
+## Chatroom Coordination
+
+When the `chatroom` MCP server is available:
+
+- Join the chatroom at the start of work with `join`.
+- Use `get_handoff` and `read_unread` to resume context efficiently.
+- Send concise progress or blocker updates with `send_message`.
+- Write `write_summary` before handoff or session end when continuity matters.
+- Leave the chatroom with `leave` when work is complete.
+```
+
+Tool semantics live in [`SPEC.md`](./SPEC.md). Use the consuming repository's own instruction files to tell agents when to use the tools.
+
 ### Server Entrypoint
 
 For direct debugging from the repository root:
@@ -144,6 +186,8 @@ python3 -c "import chatroom_mcp_server as s; print(s.join('alice')); print(s.sen
 ```
 
 ## Available Tools
+
+Authoritative tool behavior lives in [`SPEC.md`](./SPEC.md). The summaries below are quick reference.
 
 ### `join`
 

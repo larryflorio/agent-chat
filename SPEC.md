@@ -192,12 +192,12 @@ Participant identity is the stripped `name` string supplied to tools.
 
 - A `join` for a new name creates a participant record
 - A `join` for an existing name from the same process updates `role` and `last_seen`
-- A `join` for an existing name from a different process must be rejected
+- A `join` for an existing name not already joined by the current process must be rejected
 - A rejoin preserves `joined_at` if the name is already active
 
 The process must register a best-effort `atexit` handler that calls `leave(name)` for each participant name joined by that process.
 
-This is best-effort only. The implementation is not required to detect hard crashes or force-killed processes.
+This is best-effort only. The implementation is not required to detect hard crashes or force-killed processes. A stale participant record left behind by a crashed process may block reuse of that name until it is manually removed or explicitly left by another tool call.
 
 ## Input Normalization
 
@@ -249,7 +249,7 @@ Behavior:
 1. ensure state exists
 2. acquire `LOCK_EX` on `participants.json`
 3. create or update the participant record
-4. if the name is already active in a different process, reject the join
+4. if the name is already present and was not previously joined by the current process, reject the join
 5. release lock
 6. register a best-effort `atexit` leave handler for `name` in the current process
 7. return the full participant list sorted by `name`

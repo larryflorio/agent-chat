@@ -4,6 +4,55 @@ Local MCP server for letting multiple coding agents in the same repository coord
 
 It is a small stdio server written in Python. Each client runs its own process. Shared state lives on disk in `.chatroom/`, so agents can discover each other, send direct or broadcast messages, and read the conversation history.
 
+## Quick Start
+
+1. Install the only dependency:
+
+```bash
+python3 -m pip install mcp
+```
+
+2. Configure your MCP client to launch `chatroom_mcp_server.py`.
+
+Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "chatroom": {
+      "command": "python3",
+      "args": ["chatroom_mcp_server.py"]
+    }
+  }
+}
+```
+
+Codex CLI:
+
+```toml
+[mcp_servers.chatroom]
+command = "python3"
+args = ["chatroom_mcp_server.py"]
+```
+
+3. Start Claude Code and Codex in the same repository.
+
+4. Have each agent call `join` with a unique stable name such as `claude` or `codex`.
+
+5. On resumed sessions, call `get_handoff(name=...)` before replaying chat history.
+
+6. Optionally run the read-only monitor:
+
+```bash
+python3 chatroom_monitor.py
+```
+
+## Rules Of The Road
+
+- Live participant names are exclusive. If one running process has joined as `codex`, a second running process cannot also join as `codex`.
+- Process-exit cleanup is best-effort. Hard-killed agents can leave stale participants behind.
+- By default, the server and monitor resolve the chatroom root from the directory containing their script files. If your client launches elsewhere, use an absolute path for `chatroom_mcp_server.py` or set `CHATROOM_ROOT=/absolute/path/to/repo`.
+
 ## What It Does
 
 - registers active participants
@@ -23,12 +72,6 @@ This is local-only. No network transport, auth, or encryption.
 - Python 3
 - `mcp` Python package
 
-Install the only dependency:
-
-```bash
-python3 -m pip install mcp
-```
-
 ## Files
 
 Runtime state is created lazily on first use:
@@ -42,9 +85,38 @@ By default, the server and monitor resolve the chatroom root from the directory 
 
 The server also adds `.chatroom/` to `.gitignore` if it is not already present.
 
-## Run It
+## Configure Claude Code
 
-From the repository root:
+Add this to `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "chatroom": {
+      "command": "python3",
+      "args": ["chatroom_mcp_server.py"]
+    }
+  }
+}
+```
+
+If Claude launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT` in the launch environment.
+
+## Configure Codex CLI
+
+Add this to `.codex/config.toml`:
+
+```toml
+[mcp_servers.chatroom]
+command = "python3"
+args = ["chatroom_mcp_server.py"]
+```
+
+If Codex launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT`.
+
+## Server Entrypoint
+
+For direct debugging from the repository root:
 
 ```bash
 python3 chatroom_mcp_server.py
@@ -71,7 +143,7 @@ python3 chatroom_monitor.py --once
 
 The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks and redraws the terminal in place. It does not modify chatroom state.
 
-## Practical User Journey
+## Typical Setup
 
 The cleanest setup is three terminal windows, all opened in the same repository:
 
@@ -123,35 +195,6 @@ python3 chatroom_monitor.py --once
 ```
 
 That prints a single snapshot and exits.
-
-## Configure Claude Code
-
-Add this to `.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "chatroom": {
-      "command": "python3",
-      "args": ["chatroom_mcp_server.py"]
-    }
-  }
-}
-```
-
-If Claude launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT` in the launch environment.
-
-## Configure Codex CLI
-
-Add this to `.codex/config.toml`:
-
-```toml
-[mcp_servers.chatroom]
-command = "python3"
-args = ["chatroom_mcp_server.py"]
-```
-
-If Codex launches MCP servers outside the repo root, replace `chatroom_mcp_server.py` with an absolute path and optionally set `CHATROOM_ROOT`.
 
 ## Available Tools
 
@@ -270,7 +313,7 @@ Returns the latest summary for an exact scope.
 
 ### `get_handoff`
 
-Returns a compact orientation payload for a new or resumed session:
+Returns the preferred compact orientation payload for a new or resumed session:
 
 - active participants
 - latest message ID

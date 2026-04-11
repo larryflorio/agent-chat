@@ -4,7 +4,7 @@
 
 This repository is currently a minimal spec-driven project. The root contains [`SPEC.md`](/Users/lf/Documents/claude_projects/agent-chat/SPEC.md), which defines the required behavior for a local Python MCP chatroom server.
 
-If you implement the spec, keep the generated runtime in the repo root as `chatroom_mcp_server.py`. Runtime state should not be committed; per the spec, use `.chatroom/` for local message and participant files and ignore that directory in Git.
+If you implement the spec, keep the generated runtime in the repo root as `chatroom_mcp_server.py`. Runtime state should not be committed; per the spec, use `.chatroom/` for local message, participant, cursor, and summary files and ignore that directory in Git.
 
 ## Build, Test, and Development Commands
 
@@ -25,11 +25,11 @@ Use Python with 4-space indentation and standard library types/hints. Prefer cle
 - filesystem locking via `fcntl.flock`
 - plain JSON/JSONL storage under `.chatroom/`
 
-Use `snake_case` for functions and variables. Keep tool names aligned with the spec: `join`, `leave`, `send_message`, `read_messages`, `list_participants`, `get_status`.
+Use `snake_case` for functions and variables. Keep tool names aligned with the spec: `join`, `leave`, `send_message`, `read_messages`, `list_participants`, `get_status`, `get_cursor`, `set_cursor`, `read_unread`, `write_summary`, `read_latest_summary`, `get_handoff`.
 
 ## Testing Guidelines
 
-No tests are present yet. If you add them, keep them under `tests/` and name files `test_*.py`. Prioritize behavior that can regress quietly: file locking, message ID assignment, participant rejoin/leave behavior, and filtering in `read_messages`.
+No tests are present yet. If you add them, keep them under `tests/` and name files `test_*.py`. Prioritize behavior that can regress quietly: file locking, message ID assignment, participant rejoin/leave behavior, cursor updates, summary retrieval, and filtering in `read_messages` and `read_unread`.
 
 ## Commit & Pull Request Guidelines
 

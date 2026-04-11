@@ -2,20 +2,22 @@
 
 ## Assumed Context
 
-This document is the implementation spec for a local Python MCP server that allows multiple coding agents in the same repository to exchange messages through shared filesystem state.
+This repository contains a local Python MCP server that lets multiple coding agents in the same repository coordinate through shared filesystem state.
 
 ## Objective
 
-Implement a local MCP server in Python named `chatroom` that acts as a filesystem-backed chatroom and message broker for coding agents sharing the same git repository.
+Implement a local MCP server in Python named `chatroom` that acts as a filesystem-backed chatroom and handoff mechanism for coding agents sharing the same git repository.
 
-The server must allow agents to:
+The server must let agents:
 
-- register themselves as active participants
+- register as active participants
 - leave the chatroom
 - send directed or broadcast messages
-- read messages addressed to them or to everyone
-- inspect active participants
-- inspect aggregate status
+- read recent messages
+- persist per-participant unread cursors
+- write explicit handoff summaries
+- retrieve a compact resume payload for new sessions
+- inspect active participants and aggregate status
 
 The server is local-only. It is not a network service.
 
@@ -25,7 +27,7 @@ Produce exactly one runtime file in the repository root:
 
 - `chatroom_mcp_server.py`
 
-Do not create a README, test suite, package metadata, or helper modules.
+Other repository files such as documentation may exist, but the runtime implementation itself must remain single-file.
 
 ## Technology Constraints
 
@@ -34,7 +36,6 @@ Do not create a README, test suite, package metadata, or helper modules.
 - MCP API: `FastMCP` from `mcp.server.fastmcp`
 - Transport: stdio
 - Implementation shape: single file
-- Target size: under 300 lines, excluding blank lines and top-of-file config comments
 
 ## Runtime Model
 
@@ -52,6 +53,8 @@ Required files:
 
 - `.chatroom/messages.jsonl`
 - `.chatroom/participants.json`
+- `.chatroom/cursors.json`
+- `.chatroom/summaries.jsonl`
 
 ### First-Use Initialization
 
@@ -59,7 +62,9 @@ On the first tool call in a process, the server must ensure:
 
 - `.chatroom/` exists
 - `.chatroom/messages.jsonl` exists
-- `.chatroom/participants.json` exists and contains `{}` if newly created
+- `.chatroom/summaries.jsonl` exists
+- `.chatroom/participants.json` exists and contains `{}`
+- `.chatroom/cursors.json` exists and contains `{}`
 - `.chatroom/` is present as a literal line in `.gitignore`; append it if missing
 
 Initialization must be safe under concurrent execution.
@@ -74,10 +79,8 @@ Initialization must be safe under concurrent execution.
 
 Use `fcntl.flock`.
 
-- Use `LOCK_EX` for any write to `messages.jsonl`
-- Use `LOCK_EX` for any write to `participants.json`
-- Use `LOCK_SH` for any read of `messages.jsonl`
-- Use `LOCK_SH` for any read of `participants.json`
+- Use `LOCK_EX` for any write to `messages.jsonl`, `participants.json`, `cursors.json`, and `summaries.jsonl`
+- Use `LOCK_SH` for any read of those files
 
 Lock scope must include the full read-modify-write sequence for writes.
 
@@ -89,11 +92,21 @@ All timestamps must be emitted in UTC using this exact format:
 
 Use second precision only. No fractional seconds. No local offsets.
 
+## Hard Read Limit
+
+The server must enforce a maximum read limit of `100` messages for any read-oriented tool.
+
+- `read_messages.limit` must be `>= 1` and `<= 100`
+- `read_unread.limit` must be `>= 1` and `<= 100`
+- `get_handoff.recent_limit` must be `>= 1` and `<= 100`
+
+Do not silently cap oversized requests. Reject them.
+
 ## Data Model
 
 ### Message Record
 
-Each line in `.chatroom/messages.jsonl` is one JSON object with this schema:
+Each line in `.chatroom/messages.jsonl` is one JSON object:
 
 ```json
 {"id": 1, "ts": "2026-04-11T12:00:00Z", "from": "claude", "to": "all", "content": "Starting work"}
@@ -107,9 +120,9 @@ Field rules:
 - `to`: recipient name or `"all"`
 - `content`: plain-text message content
 
-### Participants File
+### Participant Record
 
-`.chatroom/participants.json` must contain a single JSON object mapping participant names to records:
+`.chatroom/participants.json` contains a JSON object mapping participant names to records:
 
 ```json
 {
@@ -122,43 +135,84 @@ Field rules:
 }
 ```
 
+### Cursor Record
+
+`.chatroom/cursors.json` contains a JSON object mapping participant names to the highest message ID that participant has explicitly marked as read:
+
+```json
+{
+  "claude": 42
+}
+```
+
 Field rules:
 
-- `name`: participant name; must equal the top-level key
-- `role`: caller-provided role string
-- `joined_at`: timestamp when the participant name first registered in the current active session entry
-- `last_seen`: most recent successful `join` by that name
+- values must be integers `>= 0`
+- missing name means cursor `0`
 
-## Message ID Allocation
+### Summary Record
+
+Each line in `.chatroom/summaries.jsonl` is one JSON object:
+
+```json
+{"id": 1, "ts": "2026-04-11T12:05:00Z", "from": "claude", "scope": "all", "content": "Auth refactor complete; tests pending."}
+```
+
+Field rules:
+
+- `id`: positive integer, unique, monotonically increasing within `summaries.jsonl`
+- `ts`: UTC timestamp string in the required format
+- `from`: sender name
+- `scope`: `"all"` or a participant name
+- `content`: plain-text summary content
+
+## ID Allocation
 
 Message IDs must be assigned while holding `LOCK_EX` on `messages.jsonl`.
 
-Allocation algorithm:
+Summary IDs must be assigned while holding `LOCK_EX` on `summaries.jsonl`.
 
-1. count existing lines in `messages.jsonl`
+Allocation algorithm for both append-only logs:
+
+1. count existing lines in the target file
 2. set `id = line_count + 1`
-3. append the new message as one JSON line
+3. append the new record as one JSON line
 4. flush before unlocking
 
-No alternative ID scheme is permitted.
+No alternative ID scheme is permitted in this version.
 
 ## Participant Lifecycle
 
-### Registration Semantics
-
-Participant identity is the `name` string supplied to tools.
+Participant identity is the stripped `name` string supplied to tools.
 
 - A `join` for a new name creates a participant record
 - A `join` for an existing name updates `role` and `last_seen`
-- A rejoin must preserve the existing `joined_at` if the name is already active
-
-### Exit Cleanup
+- A rejoin preserves `joined_at` if the name is already active
 
 The process must register a best-effort `atexit` handler that calls `leave(name)` for each participant name joined by that process.
 
 This is best-effort only. The implementation is not required to detect hard crashes or force-killed processes.
 
-Do not implement heartbeat, TTL expiry, or background cleanup.
+## Input Normalization
+
+The following inputs must be stripped of leading and trailing whitespace before validation, comparison, storage, or message generation:
+
+- `join.name`
+- `join.role`
+- `leave.name`
+- `send_message.name`
+- `send_message.content`
+- `send_message.to`
+- `get_cursor.name`
+- `set_cursor.name`
+- `read_unread.name`
+- `write_summary.name`
+- `write_summary.content`
+- `write_summary.scope`
+- `read_latest_summary.scope`
+- `get_handoff.name`
+
+Values after stripping are canonical.
 
 ## Tools
 
@@ -170,8 +224,12 @@ Expose exactly these MCP tools:
 - `read_messages`
 - `list_participants`
 - `get_status`
-
-No additional tools.
+- `get_cursor`
+- `set_cursor`
+- `read_unread`
+- `write_summary`
+- `read_latest_summary`
+- `get_handoff`
 
 ### `join`
 
@@ -187,17 +245,9 @@ Behavior:
 3. create or update the participant record
 4. release lock
 5. register a best-effort `atexit` leave handler for `name` in the current process
-6. return the full current participant list
+6. return the full participant list sorted by `name`
 
-Return shape:
-
-- list of participant dicts
-- each dict must contain `name`, `role`, `joined_at`, `last_seen`
-- order must be ascending by `name`
-
-Side effects:
-
-- `join` must not write a system message
+`join` must not write a system message.
 
 ### `leave`
 
@@ -211,25 +261,14 @@ Behavior:
 2. acquire `LOCK_EX` on `participants.json`
 3. remove the participant if present
 4. release lock
-5. if a participant was removed, append a system message to `messages.jsonl` saying `"<name> left the chatroom"`
-6. if the name was not present, do nothing else
+5. if a participant was removed, append a system message to `messages.jsonl` with content `"<name> left the chatroom"`
 
 Return shape:
 
 - `{"left": true}` if removed
 - `{"left": false}` if not present
 
-System message rules:
-
-- `from = "system"`
-- `to = "all"`
-- `content = "<name> left the chatroom"`
-
-Ordering note:
-
-- `leave` is not required to be linearizable across both files
-- if a same-name `join` occurs after participant removal but before the system message append, the `"left the chatroom"` message is still valid and must still be written
-- do not attempt cross-file transactional semantics
+`leave` is not required to be linearizable across both files.
 
 ### `send_message`
 
@@ -242,26 +281,15 @@ Parameters:
 Behavior:
 
 1. ensure state exists
-2. append one message record to `messages.jsonl`
-3. return the assigned message ID
-
-Validation:
-
-- `name` must be non-empty after stripping whitespace
-- `content` must be non-empty after stripping whitespace
-- `to` must be non-empty after stripping whitespace
-
-Normalization:
-
-- `name`, `content`, and `to` must be stripped of leading and trailing whitespace before validation and before storage
+2. validate non-blank `name`, `content`, and `to`
+3. append one message record to `messages.jsonl`
+4. return the assigned message ID
 
 Return shape:
 
 - `{"id": <int>}`
 
-Notes:
-
-- `send_message` does not require the sender to be present in `participants.json`
+`send_message` does not require the sender to be active in `participants.json`.
 
 ### `read_messages`
 
@@ -274,23 +302,17 @@ Parameters:
 Behavior:
 
 1. ensure state exists
-2. acquire `LOCK_SH` on `messages.jsonl`
-3. read messages with `id > since_id`
-4. if `participant` is non-empty, keep only messages where `to` is `"all"` or exactly equals `participant`
-5. return at most `limit` messages in ascending `id` order
+2. validate `since_id >= 0`
+3. validate `1 <= limit <= 100`
+4. read `messages.jsonl` under `LOCK_SH`
+5. keep messages with `id > since_id`
+6. if `participant` is non-empty, keep only messages where `to` is `"all"` or exactly equals `participant`
+7. apply recipient filtering before `limit`
+8. return at most `limit` messages in ascending `id` order
 
 Return shape:
 
 - list of dicts containing exactly `id`, `ts`, `from`, `to`, `content`
-
-Filtering rule:
-
-- apply recipient filtering before `limit`
-
-Validation:
-
-- `since_id` must be `>= 0`
-- `limit` must be `>= 1`
 
 ### `list_participants`
 
@@ -301,27 +323,14 @@ Parameters:
 Behavior:
 
 1. ensure state exists
-2. acquire `LOCK_SH` on `participants.json`
-3. return all active participants
-
-Return shape:
-
-- list of participant dicts
-- each dict must contain `name`, `role`, `joined_at`, `last_seen`
-- order must be ascending by `name`
+2. read `participants.json` under `LOCK_SH`
+3. return participant records sorted by `name`
 
 ### `get_status`
 
 Parameters:
 
 - none
-
-Behavior:
-
-1. ensure state exists
-2. read `participants.json` under `LOCK_SH`
-3. read `messages.jsonl` under `LOCK_SH`
-4. return aggregate status
 
 Return shape:
 
@@ -339,12 +348,144 @@ Field semantics:
 - `message_count`: count of lines in `messages.jsonl`
 - `last_activity_ts`: timestamp of the most recent message in `messages.jsonl`; `null` if no messages exist
 
-Participant updates do not count as activity for `last_activity_ts`.
+`get_status` is not required to return an atomic cross-file snapshot.
 
-Snapshot rule:
+### `get_cursor`
 
-- `get_status` is not required to return an atomic cross-file snapshot
-- values may reflect slightly different instants because `participants.json` and `messages.jsonl` are read under separate locks
+Parameters:
+
+- `name: str`
+
+Return shape:
+
+```json
+{"name": "claude", "last_read_id": 42}
+```
+
+Missing cursor state must be reported as `0`.
+
+### `set_cursor`
+
+Parameters:
+
+- `name: str`
+- `message_id: int`
+
+Behavior:
+
+1. ensure state exists
+2. validate `message_id >= 0`
+3. reject `message_id` values greater than the current latest message ID
+4. write the cursor under `LOCK_EX`
+
+Return shape:
+
+```json
+{"name": "claude", "last_read_id": 42}
+```
+
+### `read_unread`
+
+Parameters:
+
+- `name: str`
+- `limit: int = 50`
+- `mark_read: bool = true`
+
+Behavior:
+
+1. ensure state exists
+2. read the participant cursor; missing cursor means `0`
+3. read messages visible to that participant with `id > cursor`
+4. apply participant filtering before `limit`
+5. if `mark_read` is true and at least one message is returned, set the cursor to the highest returned message ID
+
+Return shape:
+
+```json
+{
+  "name": "claude",
+  "last_read_id": 42,
+  "messages": []
+}
+```
+
+The returned `last_read_id` is the post-operation cursor value.
+
+### `write_summary`
+
+Parameters:
+
+- `name: str`
+- `content: str`
+- `scope: str = "all"`
+
+Behavior:
+
+1. ensure state exists
+2. validate non-blank `name`, `content`, and `scope`
+3. append a summary record to `summaries.jsonl`
+4. return the assigned summary ID
+
+Return shape:
+
+```json
+{"id": 3}
+```
+
+### `read_latest_summary`
+
+Parameters:
+
+- `scope: str = "all"`
+
+Behavior:
+
+1. ensure state exists
+2. read `summaries.jsonl` under `LOCK_SH`
+3. return the most recent summary whose `scope` exactly matches the requested scope
+
+Return shape:
+
+- summary dict with `id`, `ts`, `from`, `scope`, `content`
+- `null` if no matching summary exists
+
+### `get_handoff`
+
+Parameters:
+
+- `name: str = ""`
+- `recent_limit: int = 10`
+
+Behavior:
+
+1. ensure state exists
+2. validate `1 <= recent_limit <= 100`
+3. return a compact orientation payload for a new or resumed session
+
+Return shape:
+
+```json
+{
+  "participants": [],
+  "latest_message_id": 42,
+  "cursor": 40,
+  "unread_count": 2,
+  "latest_summary": null,
+  "recent_messages": []
+}
+```
+
+Field semantics:
+
+- `participants`: active participants sorted by `name`
+- `latest_message_id`: latest message ID in `messages.jsonl`, or `0` if empty
+- `cursor`: current cursor for `name`, or `null` if `name` is blank
+- `unread_count`: number of messages visible to `name` with `id > cursor`, or `null` if `name` is blank
+- `latest_summary`: the most recent summary whose `scope` is `"all"` or exactly equals `name`; if `name` is blank, only scope `"all"` is eligible
+- `recent_messages`: the most recent visible messages, returned in ascending `id` order, limited by `recent_limit`
+
+This tool is the preferred low-context resume path for agents starting a new session.
 
 ## Error Handling
 
@@ -352,64 +493,28 @@ Use ordinary Python exceptions for invalid input or unrecoverable file corruptio
 
 Minimum validation requirements:
 
-- reject blank `name` in `join`, `leave`, and `send_message`
-- reject blank `content` in `send_message`
-- reject blank `to` in `send_message`
+- reject blank required string inputs after normalization
 - reject negative `since_id`
-- reject non-positive `limit`
+- reject `limit` or `recent_limit` outside `1..100`
+- reject negative cursor values
+- reject `set_cursor.message_id` values above the current latest message ID
 
 Do not silently coerce invalid values.
 
-Input normalization rule:
-
-- `join.name`, `join.role`, `leave.name`, `send_message.name`, `send_message.content`, and `send_message.to` must be stripped of leading and trailing whitespace before any validation, comparison, storage, or message generation
-- values after stripping are the canonical values used everywhere in the implementation
-
 ## Serialization Rules
 
-- Use JSON for `participants.json`
-- Use JSON Lines for `messages.jsonl`
+- Use JSON for `participants.json` and `cursors.json`
+- Use JSON Lines for `messages.jsonl` and `summaries.jsonl`
 - Encode files as UTF-8
-- One message object per line in `messages.jsonl`
-- Preserve append-only behavior for `messages.jsonl`
+- Keep `messages.jsonl` and `summaries.jsonl` append-only
 
-## Configuration Comments
+## Deliberate Non-Goal
 
-The generated `chatroom_mcp_server.py` file must include these configuration examples as comments at the top of the file.
+Physical log rotation is not part of this version.
 
-Claude Code:
+Reason:
 
-```json
-{
-  "mcpServers": {
-    "chatroom": {
-      "command": "python3",
-      "args": ["chatroom_mcp_server.py"]
-    }
-  }
-}
-```
+- message IDs are defined as `line_count + 1` inside the locked append path
+- rotating the live message log would change line count semantics and requires a different storage contract
 
-Codex CLI:
-
-```toml
-[mcp_servers.chatroom]
-command = "python3"
-args = ["chatroom_mcp_server.py"]
-```
-
-## Acceptance Criteria
-
-An implementation satisfies this spec only if all of the following are true:
-
-- it runs as a FastMCP stdio server named `chatroom`
-- it exposes exactly the six required tools
-- it creates `.chatroom/` and required files lazily on first tool use
-- it uses `fcntl.flock` with the required lock modes
-- message IDs are unique and sequential under concurrent writers
-- `messages.jsonl` remains append-only
-- `join` returns current participants and does not emit a system message
-- `leave` removes active participants and emits exactly one system message when removal occurs
-- `read_messages` filters before limiting
-- `get_status.last_activity_ts` is derived from the most recent message only
-- the implementation stays within the dependency, file-count, and single-file constraints
+Context-window control in this version is provided by cursors, summaries, handoff payloads, and hard read caps instead of message archival.

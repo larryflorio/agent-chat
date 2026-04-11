@@ -1,0 +1,25 @@
+# AGENTS.local.md
+
+Local-only instructions for this repository. Not committed.
+
+## Purpose
+
+Use this file for operator-specific guidance that is not repository policy.
+
+## Good Candidates
+
+- response style preferences
+- private working conventions
+- personal shortcuts and heuristics
+- local machine or tool assumptions
+
+## Do Not Put Here
+
+- API keys, tokens, passwords
+- shared project rules that collaborators need
+- anything required for correct repository behavior
+
+## Policy Boundary
+
+Shared, public instructions belong in `AGENTS.md`.
+Local overrides belong in `AGENTS.local.md`.

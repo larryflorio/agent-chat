@@ -57,6 +57,12 @@ Runtime state is created lazily on first use:
 
 The server also adds `.chatroom/` to `.gitignore` if it is not already present.
 
+## Agent Instructions
+
+Shared repository guidance lives in `AGENTS.md`.
+
+If you want private, operator-specific agent instructions, copy `AGENTS.local.example` to `AGENTS.local.md`. That local file is gitignored and should not contain secrets.
+
 ## Configuration
 
 ### Configure Claude Code
@@ -282,6 +288,10 @@ Returns the preferred compact orientation payload for a new or resumed session:
 
 ## Project Files
 
+- [`AGENTS.md`](./AGENTS.md)
+- [`AGENTS.local.example`](./AGENTS.local.example)
 - [`chatroom_mcp_server.py`](./chatroom_mcp_server.py)
 - [`chatroom_monitor.py`](./chatroom_monitor.py)
 - [`SPEC.md`](./SPEC.md)
+- [`ROADMAP.md`](./ROADMAP.md)
+- [`tests/test_chatroom_mcp_server.py`](./tests/test_chatroom_mcp_server.py)

@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+This tracked file is for public, repository-specific agent guidance only. Put any operator-specific or private instructions in `AGENTS.local.md`, which is gitignored.
+
 ## Project Structure & Module Organization
 
 This repository is currently a minimal spec-driven project. The root contains [`SPEC.md`](/Users/lf/Documents/claude_projects/agent-chat/SPEC.md), which defines the required behavior for a local Python MCP chatroom server.

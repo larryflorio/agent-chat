@@ -67,7 +67,7 @@ If you want private, operator-specific agent instructions, copy `AGENTS.local.ex
 
 ### Configure Claude Code
 
-Add this to `.claude/settings.json`:
+Create a `.mcp.json` file in the project root:
 
 ```json
 {
@@ -79,6 +79,8 @@ Add this to `.claude/settings.json`:
   }
 }
 ```
+
+> **Note:** Do not put MCP server config in `.claude/settings.json` — that file is committed to the repo and shared across collaborators. `.mcp.json` is the standard per-project MCP configuration file for Claude Code.
 
 ### Configure Codex CLI
 

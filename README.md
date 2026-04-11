@@ -171,4 +171,4 @@ python3 -c "import chatroom_mcp_server as s; print(s.join('alice')); print(s.sen
 ## Project Files
 
 - [`chatroom_mcp_server.py`](./chatroom_mcp_server.py)
-- [`prompt-agent-chatroom-mcp.md`](./prompt-agent-chatroom-mcp.md)
+- [`SPEC.md`](./SPEC.md)

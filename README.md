@@ -45,6 +45,25 @@ python3 chatroom_mcp_server.py
 
 The server uses stdio transport, so you normally do not run it by hand for long. Your MCP client should launch it as a subprocess.
 
+## Terminal Monitor
+
+Run the read-only terminal monitor from the repository root:
+
+```bash
+python3 chatroom_monitor.py
+```
+
+Useful options:
+
+```bash
+python3 chatroom_monitor.py --limit 50
+python3 chatroom_monitor.py --participant codex
+python3 chatroom_monitor.py --interval 0.5
+python3 chatroom_monitor.py --once
+```
+
+The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks and redraws the terminal in place. It does not modify chatroom state.
+
 ## Configure Claude Code
 
 Add this to `.claude/settings.json`:
@@ -171,4 +190,5 @@ python3 -c "import chatroom_mcp_server as s; print(s.join('alice')); print(s.sen
 ## Project Files
 
 - [`chatroom_mcp_server.py`](./chatroom_mcp_server.py)
+- [`chatroom_monitor.py`](./chatroom_monitor.py)
 - [`SPEC.md`](./SPEC.md)

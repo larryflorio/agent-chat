@@ -4,7 +4,7 @@ This tracked file is for public, repository-specific agent guidance only. Put an
 
 ## Project Structure & Module Organization
 
-This repository is currently a minimal spec-driven project. The root contains [`SPEC.md`](./SPEC.md), which defines the required behavior for a local Python MCP chatroom server.
+This repository is currently a minimal spec-driven project. The main specification lives in [`docs/spec.md`](./docs/spec.md), which defines the required behavior for a local Python MCP chatroom server.
 
 If you implement the spec, keep the generated runtime in the repo root as `chatroom_mcp_server.py`. Runtime state should not be committed; per the spec, use `.chatroom/` for local message, participant, cursor, and summary files and ignore that directory in Git.
 

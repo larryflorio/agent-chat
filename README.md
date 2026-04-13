@@ -1,119 +1,43 @@
 # Agent Chatroom MCP Server
 
-Local MCP server for letting multiple coding agents in the same repository coordinate through a shared chat log.
+Local MCP server for coordinating multiple coding agents in one repository through a shared on-disk chatroom.
 
-It is a small stdio server written in Python. Each client runs its own process. Shared state lives on disk in `.chatroom/`, so agents can discover each other, send direct or broadcast messages, and read the conversation history.
+Use it when:
+
+- multiple agents need a shared place for status, blockers, and handoffs
+- you want resume context across sessions without adding a network service
+- you want lightweight coordination that is visible to every agent working in the repo
+
+Do not use it for private messaging, push delivery, or automatic orchestration.
+
+## Contents
+
+- [Quick Start](#quick-start)
+- [First Successful Run](#first-successful-run)
+- [Common Workflows](#common-workflows)
+- [Important Constraints](#important-constraints)
+- [Troubleshooting](#troubleshooting)
+- [Monitor And Debugging](#monitor-and-debugging)
+- [Advanced Deliberation Conventions](#advanced-deliberation-conventions)
+- [For Repository Maintainers](#for-repository-maintainers)
+- [Reference](#reference)
 
 ## Quick Start
 
-1. Install the only dependency:
+Requirements:
+
+- Python 3
+- `mcp`
+
+Install the only dependency:
 
 ```bash
 python3 -m pip install mcp
 ```
 
-2. Configure your MCP client to launch `chatroom_mcp_server.py`.
-   See [Configure Claude Code](#configure-claude-code) or [Configure Codex CLI](#configure-codex-cli).
+Configure your MCP client to launch `chatroom_mcp_server.py`.
 
-3. Start your agents in the same repository.
-
-4. Have each agent call `join` with a unique stable name such as `claude` or `codex`.
-
-5. On resumed sessions, call `get_handoff(name=...)` before replaying chat history.
-
-## Rules Of The Road
-
-- Live participant names are exclusive. If one running process has joined as `codex`, a second running process cannot also join as `codex`.
-- Process-exit cleanup is best-effort. Hard-killed agents can leave stale participants behind.
-- By default, the server and monitor resolve the chatroom root from the directory containing their script files. If your client launches elsewhere, use an absolute path for `chatroom_mcp_server.py` or set `CHATROOM_ROOT=/absolute/path/to/repo`.
-- `join` only registers presence. It does not instruct other agents how to behave, subscribe them to updates, or make them automatically respond.
-- `send_message` only appends to the shared log. There is no push delivery, interrupt, or wake-up mechanism; another agent sees the message only when it reads via `get_handoff`, `read_unread`, or `read_messages`.
-- Messages sent to a named participant are a visibility convention, not a security boundary. The log is still stored locally on disk, and unfiltered reads can still see those entries.
-- `send_message` does not require the sender or recipient to be currently joined. A message to `to="alice"` is still appended even if `alice` is not active.
-
-## What It Does
-
-- registers active participants
-- sends broadcast messages to `all`
-- sends direct messages to a named participant
-- reads messages after a given message ID
-- tracks per-participant unread cursors
-- stores explicit handoff summaries
-- returns compact handoff state for resumed sessions
-- lists active participants
-- reports basic chatroom status
-
-This is local-only. No network transport, auth, or encryption.
-
-## Structured Deliberation Conventions
-
-For non-trivial design or implementation work, use the chatroom as a staged discussion log rather than a flat stream of status updates.
-
-These stages are conventions in message content only. The server does not interpret them specially.
-
-Suggested message prefixes:
-
-- `[proposal]` initial plan, diagnosis, or patch direction
-- `[review]` critique of a proposal
-- `[decision]` chosen direction
-- `[blocker]` unresolved issue preventing progress
-- `[handoff]` final cross-session summary
-
-Recommended flow for non-trivial work:
-
-1. Post one `[proposal]`
-2. Collect one or more `[review]` messages
-3. Post one `[decision]`
-4. If the work spans sessions, write one `[handoff]` summary with `write_summary`
-
-Review against:
-
-- correctness
-- spec compliance
-- regression risk
-- concurrency and locking impact
-- testing needed
-
-Example:
-
-```python
-send_message("alice", "[proposal] Keep v1 participant identity name-based. Add documentation and tests for stale participant recovery instead of changing persistence semantics.")
-send_message("bob", "[review] Correct direction. Adding heuristic stale-session detection now would change failure semantics and complicate cross-process coordination.")
-send_message("alice", "[decision] Preserve current v1 semantics. Document manual stale-participant cleanup and add coverage for rejoin and leave behavior.")
-write_summary("alice", "[handoff] Decided not to introduce session ids or heartbeat recovery in v1. Current model remains name-owned, process-local, and explicitly cleaned up.")
-```
-
-Use the tools at different levels of fidelity:
-
-- `send_message`: discussion, proposals, critique, blockers
-- `write_summary`: final synthesis or handoff
-- `get_handoff`: compact resume state
-
-## Requirements
-
-- Python 3
-- `mcp` Python package
-
-## Files
-
-Runtime state is created lazily on first use:
-
-- `.chatroom/messages.jsonl`
-- `.chatroom/participants.json`
-- `.chatroom/cursors.json`
-- `.chatroom/summaries.jsonl`
-
-The server also adds `.chatroom/` to `.gitignore` if it is not already present.
-
-## Agent Instructions
-
-Shared repository guidance lives in `AGENTS.md`.
-
-If you want private, operator-specific agent instructions, copy `AGENTS.local.example` to `AGENTS.local.md`. That local file is gitignored and should not contain secrets.
-
-## Configuration
-
-### Configure Claude Code
+### Claude Code
 
 Create a `.mcp.json` file in the project root:
 
@@ -128,9 +52,7 @@ Create a `.mcp.json` file in the project root:
 }
 ```
 
-> **Note:** Do not put MCP server config in `.claude/settings.json` — that file is committed to the repo and shared across collaborators. `.mcp.json` is the standard per-project MCP configuration file for Claude Code.
-
-### Configure Codex CLI
+### Codex CLI
 
 Add this to `.codex/config.toml`:
 
@@ -140,74 +62,162 @@ command = "python3"
 args = ["chatroom_mcp_server.py"]
 ```
 
-## Downstream Repo Instructions
+Important launch detail:
 
-If you install this MCP server into some other repository, agents in that repository will not automatically read this repository's `AGENTS.md`. They will follow the consuming repository's own instruction files.
+- shared state lives under `.chatroom/`
+- by default, the server resolves the chatroom root from the directory containing `chatroom_mcp_server.py`
+- if your client launches the server from elsewhere, use an absolute path for `chatroom_mcp_server.py` or set `CHATROOM_ROOT=/absolute/path/to/repo`
 
-For downstream use:
+Once configured:
 
-1. Install the MCP server in the consuming repository.
-2. Add a short chatroom workflow section to that repository's agent instructions.
+1. Start your agents in the same repository.
+2. Have each agent call `join` with a unique stable name such as `claude` or `codex`.
+3. On resumed sessions, call `get_handoff(name=...)` before replaying chat history.
 
-Suggested `AGENTS.md` snippet for a consuming repository:
+## First Successful Run
 
-```md
-## Chatroom Coordination
+Call these tools from two agents connected to the same repository:
 
-When using the `chatroom` MCP server for multi-agent work:
+```text
+Agent A:
+join(name="alice")
 
-- Call `join(name=...)` when starting work.
-- On resumed work, call `get_handoff(name=...)`.
-- Prefer `read_unread(name=...)` or the latest summary over replaying the full log.
-- Send coordination updates with `send_message(...)`.
-- Write a handoff with `write_summary(...)` before handing work across sessions.
-- Call `leave(name=...)` when done.
-- Instruct every participating agent to check the chatroom and act on relevant messages; joining alone does not create an automatic relay or response loop.
+Agent B:
+join(name="codex")
 
-Use the chatroom for ownership, status, blockers, and handoffs. Keep messages compact.
+Agent A:
+send_message(name="alice", to="codex", content="Started parser fix; will post tests next.")
 
-For changes affecting persistence, locking, tool semantics, or cross-process behavior:
-
-- use `[proposal]` for the initial direction
-- use `[review]` for critique focused on correctness, risk, and tests
-- use `[decision]` when a direction is chosen
-- use `[handoff]` in `write_summary` only for the final synthesized state
-
-Prefer at least one substantive review before a decision on non-trivial changes.
+Agent B:
+get_handoff(name="codex")
 ```
 
-Suggested `CLAUDE.md` snippet for a consuming repository:
+Expected result:
 
-```md
-## Chatroom Coordination
+- both names appear in the participant list
+- `codex` sees the message in `recent_messages` and an unread count greater than `0`
+- `.chatroom/` is created in the repository and added to `.gitignore` if it was missing
 
-When the `chatroom` MCP server is available:
+If you want the raw unread message list instead of the compact handoff payload, call:
 
-- Join the chatroom at the start of work with `join`.
-- Use `get_handoff` and `read_unread` to resume context efficiently.
-- Send concise progress or blocker updates with `send_message`.
-- Write `write_summary` before handoff or session end when continuity matters.
-- Leave the chatroom with `leave` when work is complete.
-- Do not assume another agent will see a message unless that agent is also instructed to read from the chatroom.
+```text
+read_unread(name="codex")
 ```
 
-Tool semantics live in [`SPEC.md`](./SPEC.md). Use the consuming repository's own instruction files to tell agents when to use the tools.
+## Common Workflows
 
-### Server Entrypoint
+### Start A Session
 
-For direct debugging from the repository root:
+Register the agent with a stable name and optional role:
 
-```bash
-python3 chatroom_mcp_server.py
+```text
+join(name="codex", role="review")
 ```
 
-The server uses stdio transport, so you normally do not run it by hand for long. Your MCP client should launch it as a subprocess.
+Use `list_participants()` if you want to see who is currently active.
 
-## Monitor / Debugging
+### Resume Work
 
-### Terminal Monitor
+Use `get_handoff` first when returning to a task:
 
-Run the read-only terminal monitor from the repository root:
+```text
+get_handoff(name="codex")
+```
+
+That gives you the current participants, unread count, latest relevant summary, and a recent message window. If you only want unread messages, use:
+
+```text
+read_unread(name="codex")
+```
+
+If you only want the latest written handoff for a scope, use:
+
+```text
+read_latest_summary(scope="all")
+```
+
+### Send A Message
+
+Broadcast to everyone:
+
+```text
+send_message(name="codex", to="all", content="Taking ownership of the monitor test failures.")
+```
+
+Send a directed message:
+
+```text
+send_message(name="codex", to="alice", content="Need your decision on the retry semantics.")
+```
+
+### Hand Off Work
+
+Write a durable summary for the next session:
+
+```text
+write_summary(name="codex", scope="all", content="Parser refactor is in. Remaining work: Windows path edge cases and monitor coverage.")
+```
+
+### Check Room Activity
+
+Use these when you need a quick status check:
+
+```text
+list_participants()
+get_status()
+```
+
+`get_status()` returns aggregate counts and the last activity timestamp. `list_participants()` tells you who is currently present.
+
+### Manage Unread State
+
+Most users can ignore cursors and rely on `get_handoff` or `read_unread`. If you need explicit unread control:
+
+```text
+get_cursor(name="codex")
+set_cursor(name="codex", message_id=42)
+```
+
+## Important Constraints
+
+- This is local-only. There is no network transport, auth, or encryption.
+- Live participant names are exclusive. If one running process has joined as `codex`, another running process cannot also join as `codex`.
+- `join` only registers presence. It does not instruct other agents how to behave or make them automatically respond.
+- `send_message` only appends to the shared log. There is no push delivery, interrupt, or wake-up mechanism.
+- Directed messages are a visibility convention, not a security boundary. The underlying log is still on disk and can be read locally.
+- `send_message` does not require the sender or recipient to be currently active. A message to `to="alice"` is still appended even if `alice` is offline.
+- Read-oriented tools reject limits above `100`.
+- Process-exit cleanup is best-effort. Hard-killed agents can leave stale participant records behind.
+
+## Troubleshooting
+
+**`join` says a participant is already active**
+
+Another live process already owns that name, or a previous process crashed and left a stale record behind. Use a different name, call `leave(name="that-name")` from a client connected to the same chatroom, or clear the stale participant before retrying.
+
+**I sent a message but the other agent did nothing**
+
+Expected. The server does not push or interrupt. The other agent has to call `get_handoff`, `read_unread`, or `read_messages` to see new messages.
+
+**My direct message is visible to other local readers**
+
+Expected. The `to` field controls filtering behavior, not privacy.
+
+**The server created `.chatroom/` in the wrong repository**
+
+Launch the server with an absolute path to `chatroom_mcp_server.py` or set `CHATROOM_ROOT=/absolute/path/to/repo`.
+
+**Unread state looks wrong**
+
+Check the current cursor with `get_cursor(name=...)`. If needed, advance it with `set_cursor(name=..., message_id=...)`. Cursors only move forward.
+
+**I need more than 100 messages**
+
+The read tools reject limits above `100`. Read in chunks with `since_id`, or use cursors and summaries to avoid replaying the entire log.
+
+## Monitor And Debugging
+
+To watch the room from a terminal without modifying chatroom state:
 
 ```bash
 python3 chatroom_monitor.py
@@ -222,190 +232,71 @@ python3 chatroom_monitor.py --interval 0.5
 python3 chatroom_monitor.py --once
 ```
 
-The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks. In normal operation it prints an initial snapshot and then appends only newly visible messages plus compact status updates; `--once` renders a single full-screen snapshot. It does not modify chatroom state.
-
-### Quick Check
-
-Syntax check:
+For direct server debugging from the repository root:
 
 ```bash
-python3 -m py_compile chatroom_mcp_server.py chatroom_monitor.py
+python3 chatroom_mcp_server.py
 ```
 
-Regression tests:
+The server uses stdio transport, so in normal use your MCP client launches it as a subprocess.
 
-```bash
-python3 -m pytest -q
-```
+## Advanced Deliberation Conventions
 
-Manual run check:
+For non-trivial design or implementation work, use the chatroom as a staged discussion log rather than a flat stream of status updates.
 
-```bash
-python3 -c "import chatroom_mcp_server as s; print(s.join('alice')); print(s.send_message('alice', 'hello')); print(s.read_unread('alice')); print(s.write_summary('alice', 'Initial handoff')); print(s.get_handoff('alice')); print(s.leave('alice'))"
-```
+Suggested prefixes:
 
-## Available Tools
+- `[proposal]` initial plan, diagnosis, or patch direction
+- `[review]` critique of a proposal
+- `[decision]` chosen direction
+- `[blocker]` unresolved issue preventing progress
+- `[handoff]` final cross-session summary
 
-Authoritative tool behavior lives in [`SPEC.md`](./SPEC.md). The summaries below are quick reference.
+Recommended flow:
 
-### `join`
-
-Registers an agent as active.
-
-Parameters:
-
-- `name: str`
-- `role: str = "general"`
-
-Returns the current participant list.
-
-### `leave`
-
-Removes an active participant and writes a system message like `"alice left the chatroom"`.
-
-Parameters:
-
-- `name: str`
-
-Returns:
-
-```json
-{"left": true}
-```
-
-### `send_message`
-
-Appends a message to the shared log.
-
-Parameters:
-
-- `name: str`
-- `content: str`
-- `to: str = "all"`
-
-Returns:
-
-```json
-{"id": 12}
-```
-
-### `read_messages`
-
-Reads messages with `id > since_id`. If `participant` is set, only messages addressed to that participant or to `all` are returned.
-
-Parameters:
-
-- `since_id: int = 0`
-- `limit: int = 50`
-- `participant: str = ""`
-
-The server rejects `limit` values above `100`.
-
-### `list_participants`
-
-Returns all active participants.
-
-### `get_status`
-
-Returns:
-
-```json
-{
-  "participant_count": 2,
-  "message_count": 14,
-  "last_activity_ts": "2026-04-11T13:00:00Z"
-}
-```
-
-### `get_cursor`
-
-Returns the stored unread cursor for a participant.
+1. Post one `[proposal]`.
+2. Collect one or more `[review]` messages.
+3. Post one `[decision]`.
+4. If the work spans sessions, write one `[handoff]` summary with `write_summary`.
 
 Example:
 
-```json
-{"name": "codex", "last_read_id": 12}
+```text
+send_message(name="alice", to="all", content="[proposal] Keep v1 participant identity name-based. Add documentation and tests for stale participant recovery instead of changing persistence semantics.")
+send_message(name="bob", to="all", content="[review] Correct direction. Adding heuristic stale-session detection now would change failure semantics and complicate cross-process coordination.")
+send_message(name="alice", to="all", content="[decision] Preserve current v1 semantics. Document manual stale-participant cleanup and add coverage for rejoin and leave behavior.")
+write_summary(name="alice", scope="all", content="[handoff] Decided not to introduce session ids or heartbeat recovery in v1. Current model remains name-owned, process-local, and explicitly cleaned up.")
 ```
 
-### `set_cursor`
+Use the tools at different levels of fidelity:
 
-Sets the unread cursor for a participant to a specific message ID.
+- `send_message` for discussion, proposals, critique, and blockers
+- `write_summary` for final synthesis and cross-session handoff
+- `get_handoff` for compact resume context
 
-Cursor updates are monotonic: the stored cursor never moves backwards.
+## For Repository Maintainers
 
-### `read_unread`
+If you install this MCP server into another repository, the agents in that repository will follow that repository's own instruction files, not this repository's `AGENTS.md`.
 
-Reads messages visible to a participant after that participant's cursor.
+Maintainer-specific setup guidance and reusable instruction snippets live in [docs/downstream-setup.md](./docs/downstream-setup.md).
 
-Parameters:
+This repository also includes:
 
-- `name: str`
-- `limit: int = 50`
-- `mark_read: bool = true`
+- shared public agent guidance in [AGENTS.md](./AGENTS.md)
+- an ignored template for private local instructions in [AGENTS.local.example](./AGENTS.local.example)
 
-If `mark_read` is true, the cursor advances to the highest returned message ID and never regresses.
+## Reference
 
-### `write_summary`
+Authoritative tool semantics live in [docs/spec.md](./docs/spec.md).
 
-Appends a summary record intended for cross-session handoff.
+Runtime state is created lazily on first use under `.chatroom/`:
 
-Parameters:
+- `.chatroom/messages.jsonl`
+- `.chatroom/participants.json`
+- `.chatroom/cursors.json`
+- `.chatroom/summaries.jsonl`
 
-- `name: str`
-- `content: str`
-- `scope: str = "all"`
+Other project documents:
 
-### `read_latest_summary`
-
-Returns the latest summary for an exact scope.
-
-### `get_handoff`
-
-Returns the preferred compact orientation payload for a new or resumed session:
-
-- active participants
-- latest message ID
-- current cursor for a named participant
-- unread count for that participant
-- latest relevant summary
-- recent visible messages
-
-## Typical Agent Flow
-
-1. Agent starts and calls `join`.
-2. On a resumed session, the agent calls `get_handoff(name=...)`.
-3. The agent reads the latest summary or uses `read_unread(name=...)` instead of replaying the full log.
-4. The agent sends status updates with `send_message`.
-5. The agent writes a summary with `write_summary` when handing work off across sessions.
-6. The agent calls `leave` when done.
-
-## What This Does Not Do
-
-- It does not orchestrate agents by itself. The server is shared state plus tools; agent behavior still has to come from each agent's instructions.
-- It does not push messages to running agents. Reading is explicit and pull-based.
-- It does not guarantee a directed message will be read, acknowledged, or acted on.
-- It does not make named messages private from other local readers of the underlying log.
-- It does not validate that a named recipient is currently active before accepting a message.
-
-## Operational Notes
-
-- Message IDs are assigned under an exclusive file lock, so concurrent writers still get unique sequential IDs.
-- Cursor writes are monotonic, so stale callers cannot move unread state backwards.
-- Participant names are treated as single-owner identities across live processes; duplicate live joins are rejected.
-- Participant cleanup on process exit is best-effort via `atexit`. Hard kills can leave stale participants behind.
-- `get_status` is not an atomic snapshot across both files. Counts can reflect slightly different moments.
-- Input strings are trimmed before validation and storage.
-- Read-oriented tools enforce a hard maximum of `100` messages per call.
-- Context control is handled by cursors, summaries, and `get_handoff`. The message log is still durable on disk.
-- This version does not rotate `messages.jsonl`; rotation would require changing the current ID-allocation contract.
-
-## Project Files
-
-- [`AGENTS.md`](./AGENTS.md)
-- [`AGENTS.local.example`](./AGENTS.local.example)
-- [`chatroom_mcp_server.py`](./chatroom_mcp_server.py)
-- [`chatroom_monitor.py`](./chatroom_monitor.py)
-- [`SPEC.md`](./SPEC.md)
-- [`ROADMAP.md`](./ROADMAP.md)
-- [`tests/test_chatroom_mcp_server.py`](./tests/test_chatroom_mcp_server.py)
-- [`tests/test_chatroom_monitor.py`](./tests/test_chatroom_monitor.py)
+- [docs/roadmap.md](./docs/roadmap.md)
+- [LICENSE.md](./LICENSE.md)

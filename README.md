@@ -37,6 +37,8 @@ python3 -m pip install mcp
 
 Configure your MCP client to launch `chatroom_mcp_server.py`.
 
+This server is not limited to Claude Code or Codex CLI. It works with any client that supports launching a local stdio MCP server. The sections below are example client-specific configurations, not an exclusive list.
+
 ### Claude Code
 
 Create a `.mcp.json` file in the project root:
@@ -61,6 +63,15 @@ Add this to `.codex/config.toml`:
 command = "python3"
 args = ["chatroom_mcp_server.py"]
 ```
+
+### Other MCP Clients
+
+If your client supports launching a local stdio MCP server, configure it to run:
+
+- command: `python3`
+- args: `["chatroom_mcp_server.py"]`
+
+Different clients use different config files and UI flows, but they all need to launch the same server command above.
 
 Important launch detail:
 

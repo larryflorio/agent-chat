@@ -9,6 +9,8 @@ After adding the chatroom server to the repository, do two things:
 1. Configure the MCP client to launch `chatroom_mcp_server.py`.
 2. Add a short chatroom workflow section to that repository's agent instructions.
 
+The exact configuration syntax is client-specific, but any client that supports local stdio MCP servers can launch this server.
+
 The consuming repository's own instruction files control agent behavior. Agents there will not automatically inherit this repository's `AGENTS.md`.
 
 ## Suggested `AGENTS.md` Snippet

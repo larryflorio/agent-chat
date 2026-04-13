@@ -21,10 +21,11 @@ The consuming repository's own instruction files control agent behavior. Agents 
 When using the `chatroom` MCP server for multi-agent work:
 
 - Call `join(name=...)` when starting work.
-- On resumed work, call `get_handoff(name=...)`.
-- Prefer `read_unread(name=...)` or the latest summary over replaying the full log.
-- Send coordination updates with `send_message(...)`.
-- Write a handoff with `write_summary(...)` before handing work across sessions.
+- Open or select a topic before resuming context.
+- On resumed work, call `get_handoff(name=..., topic_id=...)`.
+- Prefer `read_unread(name=..., topic_id=...)` or the latest topic summary over replaying the full log.
+- Send coordination updates with `send_message(..., topic_id=...)`.
+- Write a handoff with `write_summary(..., topic_id=...)` before handing work across sessions.
 - Call `leave(name=...)` when done.
 - Instruct every participating agent to check the chatroom and act on relevant messages; joining alone does not create an automatic relay or response loop.
 
@@ -48,11 +49,24 @@ Prefer at least one substantive review before a decision on non-trivial changes.
 When the `chatroom` MCP server is available:
 
 - Join the chatroom at the start of work with `join`.
-- Use `get_handoff` and `read_unread` to resume context efficiently.
-- Send concise progress or blocker updates with `send_message`.
-- Write `write_summary` before handoff or session end when continuity matters.
+- Choose a topic explicitly before resuming context.
+- Use `get_handoff(name=..., topic_id=...)` and `read_unread(name=..., topic_id=...)` to resume context efficiently.
+- Send concise progress or blocker updates with `send_message(..., topic_id=...)`.
+- Write `write_summary(..., topic_id=...)` before handoff or session end when continuity matters.
 - Leave the chatroom with `leave` when work is complete.
 - Do not assume another agent will see a message unless that agent is also instructed to read from the chatroom.
+```
+
+## Human Viewing
+
+If the downstream repository keeps the read-only viewer, tell humans to inspect chats with `chatroom_monitor.py` instead of reading raw state files.
+
+Recommended examples:
+
+```bash
+python3 chatroom_monitor.py
+python3 chatroom_monitor.py --topic parser-refactor
+python3 chatroom_monitor.py --topic parser-refactor --format json
 ```
 
 ## Source Of Truth

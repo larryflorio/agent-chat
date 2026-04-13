@@ -21,9 +21,12 @@ def resolve_root() -> Path:
 
 
 ROOT = resolve_root()
-CHATROOM_DIR = ROOT / ".chatroom"
+CHATROOM_DIR = ROOT / ".chatroom_v2"
 MESSAGES_PATH = CHATROOM_DIR / "messages.jsonl"
 PARTICIPANTS_PATH = CHATROOM_DIR / "participants.json"
+TOPICS_PATH = CHATROOM_DIR / "topics.json"
+SUMMARIES_PATH = CHATROOM_DIR / "summaries.jsonl"
+CURSORS_PATH = CHATROOM_DIR / "cursors.json"
 
 
 def file_signature(path: Path) -> tuple[bool, int | None, int | None]:
@@ -44,36 +47,113 @@ def locked_file(path: Path) -> Iterator[Any]:
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
 
 
-def load_participants() -> tuple[list[dict[str, str]], str | None]:
-    if not PARTICIPANTS_PATH.exists():
-        return [], None
+def load_json_object(path: Path) -> tuple[dict[str, Any], str | None]:
+    if not path.exists():
+        return {}, None
     try:
-        with locked_file(PARTICIPANTS_PATH) as fp:
+        with locked_file(path) as fp:
             data = json.loads(fp.read() or "{}")
     except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError) as exc:
-        return [], f"participants.json error: {exc}"
+        return {}, f"{path.name} error: {exc}"
     if not isinstance(data, dict):
-        return [], "participants.json error: expected a JSON object"
-    participants: list[dict[str, str]] = []
-    for name in sorted(data):
-        record = data[name]
-        if not isinstance(record, dict):
-            return [], "participants.json error: participant records must be JSON objects"
-        try:
-            participant_name = str(record["name"])
-            role = str(record["role"])
-        except KeyError as exc:
-            return [], f"participants.json error: missing field {exc.args[0]!r}"
-        participants.append({"name": participant_name, "role": role})
+        return {}, f"{path.name} error: expected a JSON object"
+    return data, None
+
+
+def normalize_participant_record(name: str, record: object) -> tuple[str, dict[str, Any]] | None:
+    if not isinstance(record, dict):
+        return None
+    participant_name = str(record.get("name", name)).strip()
+    if not participant_name:
+        return None
+    normalized = dict(record)
+    normalized["name"] = participant_name
+    normalized["role"] = str(normalized.get("role", ""))
+    return participant_name, normalized
+
+
+def load_participants() -> tuple[list[dict[str, Any]], str | None]:
+    data, error = load_json_object(PARTICIPANTS_PATH)
+    if error:
+        return [], error
+    participants: list[dict[str, Any]] = []
+    try:
+        if all(isinstance(value, dict) for value in data.values()):
+            records = []
+            for key, value in data.items():
+                normalized = normalize_participant_record(str(key), value)
+                if normalized is None:
+                    return [], "participants.json error: participant records must include a name"
+                records.append(normalized[1])
+            participants = sorted(records, key=lambda record: record["name"])
+        else:
+            for record in data.values():
+                if not isinstance(record, dict):
+                    return [], "participants.json error: participant records must be JSON objects"
+                normalized = normalize_participant_record(str(record.get("name", "")).strip(), record)
+                if normalized is None:
+                    return [], "participants.json error: participant records must include a name"
+                participants.append(normalized[1])
+            participants.sort(key=lambda record: record["name"])
+    except (TypeError, ValueError, KeyError) as exc:
+        return [], f"participants.json error: {exc}"
     return participants, None
 
 
-def load_messages(limit: int, participant: str, since_id: int = 0) -> tuple[list[dict[str, Any]], int, str | None, str | None]:
+def normalize_topic_record(topic_id: str, record: object) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    normalized = dict(record)
+    normalized["id"] = str(normalized.get("id", topic_id)).strip() or topic_id
+    normalized["title"] = str(normalized.get("title", normalized["id"]))
+    normalized["status"] = str(normalized.get("status", "open"))
+    normalized["created_by"] = str(normalized.get("created_by", ""))
+    normalized["created_at"] = str(normalized.get("created_at", ""))
+    closed_at = normalized.get("closed_at")
+    normalized["closed_at"] = None if closed_at in {"", "null"} else closed_at
+    last_activity_ts = normalized.get("last_activity_ts")
+    normalized["last_activity_ts"] = None if last_activity_ts in {"", "null"} else last_activity_ts
+    return normalized
+
+
+def load_topics() -> tuple[dict[str, dict[str, Any]], str | None]:
+    data, error = load_json_object(TOPICS_PATH)
+    if error:
+        return {}, error
+    topics: dict[str, dict[str, Any]] = {}
+    try:
+        for topic_id, record in data.items():
+            normalized = normalize_topic_record(str(topic_id), record)
+            if normalized is None:
+                return {}, "topics.json error: topic records must be JSON objects"
+            topics[normalized["id"]] = normalized
+    except (TypeError, ValueError, KeyError) as exc:
+        return {}, f"topics.json error: {exc}"
+    return topics, None
+
+
+def load_cursors() -> tuple[dict[str, dict[str, int]], str | None]:
+    data, error = load_json_object(CURSORS_PATH)
+    if error:
+        return {}, error
+    cursors: dict[str, dict[str, int]] = {}
+    try:
+        for participant, topic_map in data.items():
+            if not isinstance(topic_map, dict):
+                return {}, "cursors.json error: cursor maps must be JSON objects"
+            participant_name = str(participant)
+            cursors[participant_name] = {}
+            for topic_id, message_id in topic_map.items():
+                cursors[participant_name][str(topic_id)] = int(message_id)
+    except (TypeError, ValueError) as exc:
+        return {}, f"cursors.json error: {exc}"
+    return cursors, None
+
+
+def read_message_log() -> tuple[list[dict[str, Any]], str | None]:
     if not MESSAGES_PATH.exists():
-        return [], 0, None, None
-    total_count = 0
-    last_activity_ts = None
-    filtered: list[dict[str, Any]] = []
+        return [], None
+    messages: list[dict[str, Any]] = []
     try:
         with locked_file(MESSAGES_PATH) as fp:
             for line in fp:
@@ -81,15 +161,67 @@ def load_messages(limit: int, participant: str, since_id: int = 0) -> tuple[list
                 if not line:
                     continue
                 message = json.loads(line)
-                total_count += 1
-                last_activity_ts = message["ts"]
-                if participant and message["to"] not in {"all", participant}:
+                if not isinstance(message, dict):
+                    return [], "messages.jsonl error: messages must be JSON objects"
+                messages.append(message)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError) as exc:
+        return [], f"messages.jsonl error: {exc}"
+    return messages, None
+
+
+def read_summary_log() -> tuple[list[dict[str, Any]], str | None]:
+    if not SUMMARIES_PATH.exists():
+        return [], None
+    summaries: list[dict[str, Any]] = []
+    try:
+        with locked_file(SUMMARIES_PATH) as fp:
+            for line in fp:
+                line = line.strip()
+                if not line:
                     continue
-                if message["id"] <= since_id:
-                    continue
-                filtered.append(message)
-    except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError, KeyError) as exc:
-        return [], 0, None, f"messages.jsonl error: {exc}"
+                summary = json.loads(line)
+                if not isinstance(summary, dict):
+                    return [], "summaries.jsonl error: summaries must be JSON objects"
+                summaries.append(summary)
+    except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError) as exc:
+        return [], f"summaries.jsonl error: {exc}"
+    return summaries, None
+
+
+def message_topic_id(message: dict[str, Any]) -> str:
+    return str(message.get("topic_id", "")).strip()
+
+
+def message_visible_to_participant(message: dict[str, Any], participant: str) -> bool:
+    if not participant:
+        return True
+    target = str(message.get("to", "all"))
+    return target in {"all", participant}
+
+
+def load_messages(
+    limit: int,
+    participant: str,
+    since_id: int = 0,
+    topic_id: str = "",
+) -> tuple[list[dict[str, Any]], int, str | None, str | None]:
+    messages, error = read_message_log()
+    if error:
+        return [], 0, None, error
+    total_count = len(messages)
+    last_activity_ts = messages[-1].get("ts") if messages else None
+    filtered: list[dict[str, Any]] = []
+    for message in messages:
+        if topic_id and message_topic_id(message) != topic_id:
+            continue
+        if participant and not message_visible_to_participant(message, participant):
+            continue
+        try:
+            if int(message.get("id", 0)) <= since_id:
+                continue
+        except (TypeError, ValueError, KeyError) as exc:
+            return [], 0, None, f"messages.jsonl error: {exc}"
+        filtered.append(message)
     if since_id:
         return filtered, total_count, last_activity_ts, None
     return filtered[-limit:], total_count, last_activity_ts, None
@@ -101,7 +233,7 @@ def fit(text: str, width: int) -> str:
     return text[: max(0, width - 3)] + "..."
 
 
-def render_participants(participants: list[dict[str, str]], width: int) -> list[str]:
+def render_participants(participants: list[dict[str, Any]], width: int) -> list[str]:
     if not participants:
         return ["Participants: none"]
     chunks = [f"{p['name']} ({p['role'] or 'general'})" for p in participants]
@@ -113,11 +245,11 @@ def render_messages(messages: list[dict[str, Any]], width: int) -> list[str]:
     if not messages:
         return ["No messages yet."]
     for message in messages:
-        target = "all" if message["to"] == "all" else f"@{message['to']}"
-        prefix = f"[{message['id']:>4}] {message['ts']} {message['from']} -> {target}"
+        target = "all" if str(message.get("to", "all")) == "all" else f"@{message['to']}"
+        prefix = f"[{int(message.get('id', 0)):>4}] {message.get('ts', '')} {message.get('from', '')} -> {target}"
         lines.append(fit(prefix, width))
         wrapped = textwrap.wrap(
-            message["content"],
+            str(message.get("content", "")),
             width=max(20, width - 2),
             initial_indent="  ",
             subsequent_indent="  ",
@@ -127,160 +259,460 @@ def render_messages(messages: list[dict[str, Any]], width: int) -> list[str]:
     return lines
 
 
-def load_cached_state(args: argparse.Namespace, cache: dict[str, Any]) -> dict[str, Any]:
-    participants_sig = file_signature(PARTICIPANTS_PATH)
-    if participants_sig != cache.get("participants_sig"):
-        participants, participants_error = load_participants()
-        cache["participants_sig"] = participants_sig
-        cache["participants"] = participants
-        cache["participants_error"] = participants_error
+def summary_scope_label(summary: dict[str, Any] | None) -> str:
+    if not summary:
+        return "none"
+    scope = str(summary.get("scope", "all"))
+    return scope or "all"
 
-    messages_sig = file_signature(MESSAGES_PATH)
-    if messages_sig != cache.get("messages_sig"):
-        messages, total_count, last_activity_ts, messages_error = load_messages(args.limit, args.participant)
-        cache["messages_sig"] = messages_sig
-        cache["messages"] = messages
-        cache["total_count"] = total_count
-        cache["last_activity_ts"] = last_activity_ts
-        cache["messages_error"] = messages_error
 
-    return cache
+def summary_text(summary: dict[str, Any] | None) -> str:
+    if not summary:
+        return "none"
+    return str(summary.get("content", "")).strip() or "none"
+
+
+def coerce_topic_record(topic_id: str, record: dict[str, Any] | None) -> dict[str, Any]:
+    base = {
+        "id": topic_id,
+        "title": topic_id,
+        "status": "open",
+        "created_by": "",
+        "created_at": "",
+        "closed_at": None,
+        "last_activity_ts": None,
+    }
+    if record:
+        base.update(record)
+    base["id"] = str(base.get("id", topic_id)) or topic_id
+    base["title"] = str(base.get("title", base["id"]))
+    base["status"] = str(base.get("status", "open"))
+    base["created_by"] = str(base.get("created_by", ""))
+    base["created_at"] = str(base.get("created_at", ""))
+    closed_at = base.get("closed_at")
+    base["closed_at"] = None if closed_at in {"", "null"} else closed_at
+    last_activity_ts = base.get("last_activity_ts")
+    base["last_activity_ts"] = None if last_activity_ts in {"", "null"} else last_activity_ts
+    return base
 
 
 def state_messages(state: dict[str, Any]) -> list[str]:
     messages: list[str] = []
     if not CHATROOM_DIR.exists():
-        messages.append("Waiting for chatroom initialization...")
-    for error in (state["participants_error"], state["messages_error"]):
+        messages.append("Waiting for chatroom_v2 initialization...")
+    for error in (
+        state.get("participants_error"),
+        state.get("topics_error"),
+        state.get("messages_error"),
+        state.get("summaries_error"),
+        state.get("cursors_error"),
+    ):
         if error:
-            messages.append(error)
+            messages.append(str(error))
     return messages
+
+
+def load_cached_state(args: argparse.Namespace, cache: dict[str, Any]) -> dict[str, Any]:
+    signatures = {
+        "participants_sig": file_signature(PARTICIPANTS_PATH),
+        "topics_sig": file_signature(TOPICS_PATH),
+        "messages_sig": file_signature(MESSAGES_PATH),
+        "summaries_sig": file_signature(SUMMARIES_PATH),
+        "cursors_sig": file_signature(CURSORS_PATH),
+    }
+    if any(signatures[key] != cache.get(key) for key in signatures):
+        participants, participants_error = load_participants()
+        topics, topics_error = load_topics()
+        messages, messages_error = read_message_log()
+        summaries, summaries_error = read_summary_log()
+        cursors, cursors_error = load_cursors()
+        cache.update(signatures)
+        cache.update(
+            {
+                "participants": participants,
+                "participants_error": participants_error,
+                "topics": topics,
+                "topics_error": topics_error,
+                "messages": messages,
+                "messages_error": messages_error,
+                "summaries": summaries,
+                "summaries_error": summaries_error,
+                "cursors": cursors,
+                "cursors_error": cursors_error,
+            }
+        )
+    return cache
+
+
+def topic_ids_from_state(state: dict[str, Any]) -> set[str]:
+    topic_ids = {str(topic_id) for topic_id in state.get("topics", {})}
+    for message in state.get("messages", []):
+        topic_id = message_topic_id(message)
+        if topic_id:
+            topic_ids.add(topic_id)
+    for summary in state.get("summaries", []):
+        topic_id = str(summary.get("topic_id", "")).strip()
+        if topic_id:
+            topic_ids.add(topic_id)
+    for participant_map in state.get("cursors", {}).values():
+        for topic_id in participant_map:
+            topic_ids.add(str(topic_id))
+    return topic_ids
+
+
+def latest_summary_index(summaries: list[dict[str, Any]]) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_topic_scope: dict[tuple[str, str], dict[str, Any]] = {}
+    by_topic: dict[str, dict[str, Any]] = {}
+    for summary in summaries:
+        topic_id = str(summary.get("topic_id", "")).strip()
+        if not topic_id:
+            continue
+        scope = str(summary.get("scope", "all")).strip() or "all"
+        by_topic_scope[(topic_id, scope)] = summary
+        by_topic[topic_id] = summary
+    return by_topic_scope, by_topic
+
+
+def topic_last_activity(topics: dict[str, dict[str, Any]], messages_by_topic: dict[str, list[dict[str, Any]]]) -> dict[str, str | None]:
+    last_activity: dict[str, str | None] = {}
+    for topic_id, record in topics.items():
+        last_activity[topic_id] = record.get("last_activity_ts") or record.get("created_at") or None
+    for topic_id, messages in messages_by_topic.items():
+        if not messages:
+            continue
+        last_activity[topic_id] = messages[-1].get("ts") or last_activity.get(topic_id)
+    return last_activity
+
+
+def build_view_model(args: argparse.Namespace, state: dict[str, Any]) -> dict[str, Any]:
+    participants = state.get("participants", [])
+    participant_filter = args.participant.strip()
+    status_filter = args.status
+    topic_filter = args.topic.strip()
+    messages = state.get("messages", [])
+    summaries = state.get("summaries", [])
+    cursors = state.get("cursors", {})
+    topic_map = {topic_id: coerce_topic_record(topic_id, record) for topic_id, record in state.get("topics", {}).items()}
+    observed_topic_ids = topic_ids_from_state(state)
+    for topic_id in observed_topic_ids:
+        topic_map.setdefault(topic_id, coerce_topic_record(topic_id, None))
+
+    messages_by_topic: dict[str, list[dict[str, Any]]] = {topic_id: [] for topic_id in topic_map}
+    for message in messages:
+        topic_id = message_topic_id(message)
+        if not topic_id:
+            continue
+        messages_by_topic.setdefault(topic_id, []).append(message)
+    for topic_id, topic_messages in messages_by_topic.items():
+        topic_messages.sort(key=lambda message: int(message.get("id", 0)))
+
+    latest_summary_by_topic_scope, latest_summary_by_topic = latest_summary_index(summaries)
+    last_activity = topic_last_activity(topic_map, messages_by_topic)
+    for topic_id, topic_record in topic_map.items():
+        topic_record["last_activity_ts"] = last_activity.get(topic_id)
+
+    overview_topics = list(topic_map.values())
+    if status_filter != "all":
+        overview_topics = [topic for topic in overview_topics if topic["status"] == status_filter]
+    overview_topics.sort(key=lambda topic: topic["id"])
+    overview_topics.sort(key=lambda topic: topic.get("last_activity_ts") or "", reverse=True)
+    if args.limit:
+        overview_topics = overview_topics[: args.limit]
+
+    topic_rows: list[dict[str, Any]] = []
+    for topic in overview_topics:
+        topic_id = topic["id"]
+        topic_messages = messages_by_topic.get(topic_id, [])
+        latest_message_id = int(topic_messages[-1]["id"]) if topic_messages else 0
+        summary = latest_summary_by_topic_scope.get((topic_id, "all")) or latest_summary_by_topic.get(topic_id)
+        unread_count = None
+        cursor = None
+        if participant_filter:
+            cursor = int(cursors.get(participant_filter, {}).get(topic_id, 0))
+            unread_count = sum(
+                1
+                for message in topic_messages
+                if int(message.get("id", 0)) > cursor and message_visible_to_participant(message, participant_filter)
+            )
+        topic_rows.append(
+            {
+                **topic,
+                "message_count": len(topic_messages),
+                "latest_message_id": latest_message_id,
+                "latest_summary": summary,
+                "unread_count": unread_count,
+                "cursor": cursor,
+            }
+        )
+
+    selected_topic = coerce_topic_record(topic_filter, topic_map.get(topic_filter)) if topic_filter else None
+    if topic_filter and topic_filter not in topic_map:
+        selected_topic = coerce_topic_record(topic_filter, None)
+    selected_messages: list[dict[str, Any]] = []
+    selected_summary: dict[str, Any] | None = None
+    selected_cursor = None
+    selected_unread_count = None
+    if topic_filter:
+        selected_topic_messages = list(messages_by_topic.get(topic_filter, []))
+        if participant_filter:
+            selected_topic_messages = [message for message in selected_topic_messages if message_visible_to_participant(message, participant_filter)]
+            selected_cursor = int(cursors.get(participant_filter, {}).get(topic_filter, 0))
+            selected_unread_count = sum(
+                1 for message in selected_topic_messages if int(message.get("id", 0)) > selected_cursor
+            )
+        if args.limit:
+            selected_messages = selected_topic_messages[-args.limit:]
+        else:
+            selected_messages = selected_topic_messages
+        selected_summary = latest_summary_by_topic_scope.get((topic_filter, "all")) or latest_summary_by_topic.get(topic_filter)
+    room_status = {
+        "participant_count": len(participants),
+        "topic_count": len(topic_map),
+        "open_topic_count": sum(1 for topic in topic_map.values() if topic["status"] == "open"),
+        "message_count": len(messages),
+        "last_activity_ts": max((topic.get("last_activity_ts") or "" for topic in topic_map.values()), default="") or None,
+    }
+    return {
+        "mode": "topic" if topic_filter else "overview",
+        "root": str(ROOT),
+        "status_filter": status_filter,
+        "participant_filter": participant_filter or None,
+        "topic_filter": topic_filter or None,
+        "participants": participants,
+        "topics": topic_rows,
+        "topic": selected_topic,
+        "messages": selected_messages,
+        "latest_summary": selected_summary,
+        "cursor": selected_cursor,
+        "unread_count": selected_unread_count,
+        "status": room_status,
+        "state_messages": state_messages(state),
+    }
+
+
+def render_topic_row(topic: dict[str, Any], participant_filter: str, width: int) -> str:
+    unread = topic.get("unread_count")
+    unread_text = f"unread: {unread}" if unread is not None else "unread: -"
+    summary = summary_text(topic.get("latest_summary"))
+    scope = summary_scope_label(topic.get("latest_summary"))
+    summary_part = f"summary[{scope}]: {summary}"
+    return fit(
+        (
+            f"- [{topic['status']}] {topic['id']} | {unread_text} | "
+            f"messages: {topic['message_count']} | last: {topic.get('last_activity_ts') or 'none'} | {summary_part}"
+        ),
+        width,
+    )
+
+
+def render_text_lines(args: argparse.Namespace, view: dict[str, Any], width: int) -> list[str]:
+    lines = [
+        "Agent Chatroom Monitor",
+        fit(f"Repo: {ROOT}", width),
+    ]
+    if view["mode"] == "topic":
+        lines.append(
+            f"View: topic {view['topic_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
+        )
+    else:
+        lines.append(
+            f"View: overview | Status filter: {view['status_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
+        )
+    lines.append(
+        fit(
+            (
+                f"Status: participants {view['status']['participant_count']} | topics {view['status']['topic_count']} | "
+                f"open {view['status']['open_topic_count']} | messages {view['status']['message_count']} | "
+                f"last activity: {view['status']['last_activity_ts'] or 'none'}"
+            ),
+            width,
+        )
+    )
+    for message in view["state_messages"]:
+        lines.append(fit(f"State: {message}", width))
+    lines.append("-" * min(width, 80))
+    lines.extend(render_participants(view["participants"], width))
+    lines.append("-" * min(width, 80))
+    if view["mode"] == "overview":
+        lines.append(f"Topics (showing up to {args.limit}):")
+        if not view["topics"]:
+            lines.append("No topics yet.")
+        else:
+            for topic in view["topics"]:
+                lines.append(render_topic_row(topic, view["participant_filter"] or "", width))
+    else:
+        topic = view["topic"]
+        if not topic:
+            lines.append("Topic: missing")
+        else:
+            lines.append(f"Topic: {topic['id']} [{topic['status']}]")
+            lines.append(fit(f"Title: {topic['title']}", width))
+            lines.append(fit(f"Created by: {topic['created_by'] or 'unknown'}", width))
+            lines.append(fit(f"Created at: {topic['created_at'] or 'unknown'}", width))
+            lines.append(fit(f"Last activity: {topic.get('last_activity_ts') or 'none'}", width))
+        if view["participant_filter"]:
+            lines.append(
+                fit(
+                    f"Viewer participant: {view['participant_filter']} | Cursor: {view['cursor'] or 0} | Unread: {view['unread_count'] or 0}",
+                    width,
+                )
+            )
+        lines.append("-" * min(width, 80))
+        lines.append("Latest summary:")
+        lines.append(f"  [{summary_scope_label(view['latest_summary'])}] {summary_text(view['latest_summary'])}")
+        lines.append("-" * min(width, 80))
+        lines.append(f"Recent messages (showing up to {args.limit}):")
+        lines.extend(render_messages(view["messages"], width))
+    lines.append("")
+    lines.append("Ctrl-C to exit")
+    return lines
+
+
+def render_text_snapshot(args: argparse.Namespace, view: dict[str, Any], width: int) -> str:
+    return "\x1b[2J\x1b[H" + "\n".join(render_text_lines(args, view, width))
+
+
+def render_json_snapshot(args: argparse.Namespace, view: dict[str, Any]) -> str:
+    payload = {
+        "mode": view["mode"],
+        "root": view["root"],
+        "participant_filter": view["participant_filter"],
+        "status_filter": view["status_filter"],
+        "status": view["status"],
+        "participants": view["participants"],
+        "topics": view["topics"],
+        "topic": view["topic"],
+        "messages": view["messages"],
+        "latest_summary": view["latest_summary"],
+        "cursor": view["cursor"],
+        "unread_count": view["unread_count"],
+        "state_messages": view["state_messages"],
+        "limit": args.limit,
+    }
+    return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
 
 def snapshot_frame(args: argparse.Namespace, state: dict[str, Any]) -> str:
     width = shutil.get_terminal_size((100, 24)).columns
-    participant_filter = args.participant or "none"
-    participants = state["participants"]
-    messages = state["messages"]
-    total_count = state["total_count"]
-    last_activity_ts = state["last_activity_ts"]
-    current_state_messages = state_messages(state)
-    lines = [
-        "Agent Chatroom Monitor",
-        fit(f"Repo: {ROOT}", width),
-        f"Refresh: {args.interval:.1f}s | Participant filter: {participant_filter}",
-        f"Participants: {len(participants)} | Messages: {total_count} | Last activity: {last_activity_ts or 'none'}",
-        "-" * min(width, 80),
-    ]
-    lines.extend(fit(f"State: {message}", width) for message in current_state_messages)
-    if current_state_messages:
-        lines.append("-" * min(width, 80))
-    lines.extend(render_participants(participants, width))
-    lines.append("-" * min(width, 80))
-    lines.append(f"Recent messages (showing up to {args.limit}):")
-    lines.extend(render_messages(messages, width))
-    lines.append("")
-    lines.append("Ctrl-C to exit")
-    return "\x1b[2J\x1b[H" + "\n".join(lines)
+    view = build_view_model(args, state)
+    return render_text_snapshot(args, view, width)
 
 
 def live_status_lines(args: argparse.Namespace, state: dict[str, Any], width: int) -> list[str]:
+    view = build_view_model(args, state)
     lines = [
         fit(
             (
-                f"Status | Participants: {len(state['participants'])} | Messages: {state['total_count']} | "
-                f"Last activity: {state['last_activity_ts'] or 'none'}"
+                f"Status | participants {view['status']['participant_count']} | topics {view['status']['topic_count']} | "
+                f"open {view['status']['open_topic_count']} | messages {view['status']['message_count']} | "
+                f"last activity: {view['status']['last_activity_ts'] or 'none'}"
             ),
             width,
         )
     ]
-    lines.extend(fit(f"State | {message}", width) for message in state_messages(state))
-    lines.extend(fit(line, width) for line in render_participants(state["participants"], width))
+    lines.extend(fit(f"State | {message}", width) for message in view["state_messages"])
+    lines.extend(fit(line, width) for line in render_participants(view["participants"], width))
+    if view["mode"] == "topic" and view["topic"]:
+        topic = view["topic"]
+        lines.append(fit(f"Topic | {topic['id']} [{topic['status']}]", width))
+        lines.append(fit(f"Title | {topic['title']}", width))
     return lines
 
 
 def print_live_header(args: argparse.Namespace, state: dict[str, Any], width: int) -> None:
-    participant_filter = args.participant or "none"
+    view = build_view_model(args, state)
     lines = [
         "Agent Chatroom Monitor",
         fit(f"Repo: {ROOT}", width),
-        f"Refresh: {args.interval:.1f}s | Participant filter: {participant_filter}",
-        "Follow mode: appending new messages only. Ctrl-C to exit.",
-        "-" * min(width, 80),
     ]
+    if view["mode"] == "topic":
+        lines.append(
+            f"View: topic {view['topic_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
+        )
+    else:
+        lines.append(
+            f"View: overview | Status filter: {view['status_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
+        )
+    lines.append("-" * min(width, 80))
     lines.extend(live_status_lines(args, state, width))
     lines.append("-" * min(width, 80))
     print("\n".join(lines), flush=True)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Read-only terminal monitor for the agent chatroom.")
-    parser.add_argument("--limit", type=int, default=30, help="Number of recent messages to display.")
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Read-only terminal viewer for the agent chatroom.")
+    parser.add_argument("--limit", type=int, default=30, help="Number of topics or messages to display.")
     parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval in seconds.")
+    parser.add_argument("--participant", default="", help="Show participant-aware unread counts and visibility filtering.")
+    parser.add_argument("--topic", default="", help="Show a single topic in detail.")
     parser.add_argument(
-        "--participant",
-        default="",
-        help='Show only messages addressed to this participant or to "all".',
+        "--status",
+        choices=("open", "closed", "all"),
+        default="open",
+        help="Filter topics in overview mode.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Render as human-readable text or structured JSON.",
     )
     parser.add_argument("--once", action="store_true", help="Render one frame and exit.")
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     if args.limit < 1:
         raise ValueError("--limit must be >= 1")
     if args.interval <= 0:
         raise ValueError("--interval must be > 0")
     args.participant = args.participant.strip()
+    args.topic = args.topic.strip()
     cache: dict[str, Any] = {
         "participants_sig": None,
+        "topics_sig": None,
+        "messages_sig": None,
+        "summaries_sig": None,
+        "cursors_sig": None,
         "participants": [],
         "participants_error": None,
-        "messages_sig": None,
+        "topics": {},
+        "topics_error": None,
         "messages": [],
-        "total_count": 0,
-        "last_activity_ts": None,
         "messages_error": None,
+        "summaries": [],
+        "summaries_error": None,
+        "cursors": {},
+        "cursors_error": None,
     }
     state = load_cached_state(args, cache)
-    if args.once:
-        print(snapshot_frame(args, state), end="", flush=True)
-        print()
-        return
     width = shutil.get_terminal_size((100, 24)).columns
-    print_live_header(args, state, width)
-    initial_messages = state["messages"]
-    if initial_messages:
-        print("\n".join(render_messages(initial_messages, width)), flush=True)
+    view = build_view_model(args, state)
+    if args.format == "json":
+        rendered = render_json_snapshot(args, view)
     else:
-        print("No messages yet.", flush=True)
-    last_rendered_message_id = initial_messages[-1]["id"] if initial_messages else 0
-    last_participants_sig = state["participants_sig"]
-    last_messages_sig = state["messages_sig"]
-    last_status_lines = live_status_lines(args, state, width)
+        rendered = render_text_snapshot(args, view, width)
+    if args.once:
+        print(rendered, end="")
+        return
+    print(rendered, end="" if rendered.endswith("\n") else "\n", flush=True)
+    last_rendered = rendered
     unchanged_polls = 0
     try:
         while True:
-            width = shutil.get_terminal_size((100, 24)).columns
             state = load_cached_state(args, cache)
-            changed = False
-            current_status_lines = live_status_lines(args, state, width)
-            if state["participants_sig"] != last_participants_sig or current_status_lines != last_status_lines:
-                print("\n".join(current_status_lines), flush=True)
-                last_participants_sig = state["participants_sig"]
-                last_status_lines = current_status_lines
-                changed = True
-            if state["messages_sig"] != last_messages_sig:
-                new_messages, _, _, new_messages_error = load_messages(args.limit, args.participant, since_id=last_rendered_message_id)
-                last_messages_sig = state["messages_sig"]
-                if new_messages_error:
-                    error_line = fit(f"State | {new_messages_error}", width)
-                    if error_line not in last_status_lines:
-                        print(error_line, flush=True)
-                        last_status_lines = [*last_status_lines, error_line]
-                    changed = True
-                elif new_messages:
-                    print("\n".join(render_messages(new_messages, width)), flush=True)
-                    last_rendered_message_id = new_messages[-1]["id"]
-                    changed = True
+            width = shutil.get_terminal_size((100, 24)).columns
+            view = build_view_model(args, state)
+            if args.format == "json":
+                rendered = render_json_snapshot(args, view)
+            else:
+                rendered = render_text_snapshot(args, view, width)
+            changed = rendered != last_rendered
             if changed:
+                print(rendered, end="" if rendered.endswith("\n") else "\n", flush=True)
+                last_rendered = rendered
                 unchanged_polls = 0
             else:
                 unchanged_polls += 1

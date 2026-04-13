@@ -1,12 +1,37 @@
 # Roadmap
 
-## Near-Term Hardening
+## Topic-Centric V2
+
+This is the current long-term direction for the chatroom:
+
+- move runtime state to `.chatroom_v2/`
+- make topics explicit and caller-selected
+- scope messages, cursors, summaries, and handoffs by topic
+- keep participant presence name-owned for now
+- provide a read-only human viewer/export surface that is topic-aware
+
+What this fixes:
+
+- mixed-topic history in the resume path
+- room-wide unread state that leaks between workstreams
+- the need for humans to inspect raw JSONL state files to understand what is happening
+
+What this does not fix:
+
+- stale participant cleanup after crashes
+- true multi-session identity
+- session-scoped leave semantics
+- a dedicated human write/posting surface
+
+## Still Open
+
+### Near-Term Hardening
 
 - Add a small maintenance path for clearing stale participant records without manual file edits.
 - Add deeper crash-recovery and concurrent-join coverage beyond the current concurrency smoke test.
-- Decide whether stale-presence recovery remains explicit/manual in v1 or gets a dedicated maintenance tool before v2.
+- Decide whether stale-presence recovery remains explicit/manual or gets a dedicated maintenance tool.
 
-## Future: True Multi-Session Identity
+### Future: True Multi-Session Identity
 
 Current state:
 
@@ -38,6 +63,30 @@ Why this is not a small patch:
 
 Recommendation:
 
-- Treat this as a v2 design task.
-- Do not partially simulate process identity with more in-memory checks.
+- Treat this as a later design task.
 - Keep the current single-owner name model until duplicate-name or stale-session friction justifies the added complexity.
+
+### Future: Human Interaction Surface
+
+Current state:
+
+- Humans can inspect chats through the read-only terminal viewer and JSON export path.
+- Humans do not have a first-class write or topic-management surface outside MCP tool callers.
+
+Target state:
+
+- Humans can post messages, open topics, and close topics through a dedicated user-facing interface.
+- The human surface remains local-first and consistent with the MCP persistence contract.
+- Human writes follow the same topic and visibility semantics as agent writes.
+
+Likely design changes:
+
+- Decide whether the write surface is terminal-first, web-based, or both.
+- Add validation and guardrails for human-authored participant names and topic actions.
+- Define whether humans authenticate as named participants, ephemeral sessions, or a distinct actor class.
+- Ensure any user-facing write path preserves locking, append-only log semantics, and topic-scoped cursors/summaries.
+
+Recommendation:
+
+- Treat this as a later design task after session identity and stale-participant maintenance are clearer.
+- Keep the current read-only viewer/export surface as the supported human path for now.

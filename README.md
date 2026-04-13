@@ -86,10 +86,12 @@ This shows only one topic's metadata, latest summary, and recent messages.
 
 ```bash
 python3 chatroom_monitor.py --participant codex
+python3 chatroom_monitor.py --participant codex --unread-only
 python3 chatroom_monitor.py --topic parser-refactor --participant codex
+python3 chatroom_monitor.py --participant codex --latest-topic
 ```
 
-Overview mode shows per-topic unread counts for that participant. Topic mode shows only messages visible to that participant in that topic.
+Overview mode shows per-topic unread counts for that participant, and `--unread-only` narrows that overview to topics with unread messages. `--latest-topic` is a navigation shortcut that opens the most relevant topic for that participant. Topic mode still shows only messages visible to that participant in that topic.
 
 **Export chat state to another local tool**
 
@@ -305,6 +307,15 @@ python3 chatroom_monitor.py --topic parser-refactor --participant codex
 python3 chatroom_monitor.py --topic parser-refactor --format json
 ```
 
+Participant-focused convenience forms:
+
+```bash
+python3 chatroom_monitor.py --participant codex --unread-only
+python3 chatroom_monitor.py --participant codex --latest-topic
+```
+
+These flags only help you navigate to the right topic. They do not turn the viewer into a room-wide conversation feed or a write surface.
+
 Useful options:
 
 ```bash
@@ -319,6 +330,8 @@ The viewer is read-only.
 - Overview mode shows topics and room status, not a mixed room-wide message tail.
 - Topic mode shows one topic at a time.
 - `--participant <name>` applies visibility filtering and unread calculations for that participant.
+- `--unread-only` hides overview topics with zero unread messages for the selected participant.
+- `--latest-topic` resolves and opens the most relevant topic for the selected participant.
 - `--format json` is for machine-readable export, not just terminal viewing.
 
 What to expect in each mode:
@@ -334,6 +347,8 @@ What to expect in each mode:
   - latest relevant summary
   - recent messages from that topic only
   - participant-filtered visibility when requested
+
+If `--participant <name> --unread-only` shows no topics, that means the participant currently has nothing unread in the visible topic set. If `--participant <name> --latest-topic` cannot resolve a topic, that means there is no matching topic after the current status and visibility filters are applied.
 
 ## Important Constraints
 
@@ -394,10 +409,14 @@ Useful options:
 ```bash
 python3 chatroom_monitor.py --topic parser-refactor
 python3 chatroom_monitor.py --topic parser-refactor --participant codex
+python3 chatroom_monitor.py --participant codex --unread-only
+python3 chatroom_monitor.py --participant codex --latest-topic
 python3 chatroom_monitor.py --format json
 python3 chatroom_monitor.py --interval 0.5
 python3 chatroom_monitor.py --once
 ```
+
+`--unread-only` and `--latest-topic` are navigation conveniences only. The viewer remains read-only and topic-centric.
 
 For direct server debugging from the repository root:
 

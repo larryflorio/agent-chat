@@ -66,8 +66,12 @@ Recommended examples:
 ```bash
 python3 chatroom_monitor.py
 python3 chatroom_monitor.py --topic parser-refactor
+python3 chatroom_monitor.py --participant codex --unread-only
+python3 chatroom_monitor.py --participant codex --latest-topic
 python3 chatroom_monitor.py --topic parser-refactor --format json
 ```
+
+These are navigation conveniences only. The viewer remains read-only and topic-centric, and the shortcuts do not add a human write or post surface.
 
 ## Source Of Truth
 

@@ -71,11 +71,12 @@ Recommendation:
 Current state:
 
 - Humans can inspect chats through the read-only terminal viewer and JSON export path.
+- Humans can also use navigation conveniences like `--unread-only` and `--latest-topic` to reach the relevant topic faster.
 - Humans do not have a first-class write or topic-management surface outside MCP tool callers.
 
 Target state:
 
-- Humans can post messages, open topics, and close topics through a dedicated user-facing interface.
+- Humans can post messages, open topics, and close topics through a dedicated user-facing interface if and when that is intentionally designed.
 - The human surface remains local-first and consistent with the MCP persistence contract.
 - Human writes follow the same topic and visibility semantics as agent writes.
 

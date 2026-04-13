@@ -384,7 +384,54 @@ def topic_last_activity(topics: dict[str, dict[str, Any]], messages_by_topic: di
     return last_activity
 
 
+def sort_topic_rows(topic_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = sorted(topic_rows, key=lambda topic: topic["id"])
+    return sorted(ordered, key=lambda topic: topic.get("last_activity_ts") or "", reverse=True)
+
+
+def resolve_latest_topic(topic_rows: list[dict[str, Any]], participant_filter: str) -> str | None:
+    if not participant_filter or not topic_rows:
+        return None
+    unread_topics = [topic for topic in topic_rows if int(topic.get("unread_count") or 0) > 0]
+    if unread_topics:
+        return sort_topic_rows(unread_topics)[0]["id"]
+    return sort_topic_rows(topic_rows)[0]["id"]
+
+
+def overview_command_hints(args: argparse.Namespace, view: dict[str, Any]) -> list[str]:
+    participant_filter = view["participant_filter"] or ""
+    if not participant_filter or not view["topics"]:
+        return []
+    topic_id = view.get("suggested_topic_id")
+    if not topic_id:
+        return []
+    return [
+        "Inspect next:",
+        f"  python3 chatroom_monitor.py --topic {topic_id} --participant {participant_filter}",
+        f"  python3 chatroom_monitor.py --participant {participant_filter} --latest-topic",
+    ]
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    unread_only = bool(getattr(args, "unread_only", False))
+    latest_topic = bool(getattr(args, "latest_topic", False))
+    if args.limit < 1:
+        raise ValueError("--limit must be >= 1")
+    if args.interval <= 0:
+        raise ValueError("--interval must be > 0")
+    if unread_only and not args.participant:
+        raise ValueError("--unread-only requires --participant")
+    if unread_only and (args.topic or latest_topic):
+        raise ValueError("--unread-only is only valid in overview mode")
+    if latest_topic and not args.participant:
+        raise ValueError("--latest-topic requires --participant")
+    if latest_topic and args.topic:
+        raise ValueError("--latest-topic cannot be combined with --topic")
+
+
 def build_view_model(args: argparse.Namespace, state: dict[str, Any]) -> dict[str, Any]:
+    unread_only = bool(getattr(args, "unread_only", False))
+    latest_topic = bool(getattr(args, "latest_topic", False))
     participants = state.get("participants", [])
     participant_filter = args.participant.strip()
     status_filter = args.status
@@ -414,12 +461,9 @@ def build_view_model(args: argparse.Namespace, state: dict[str, Any]) -> dict[st
     overview_topics = list(topic_map.values())
     if status_filter != "all":
         overview_topics = [topic for topic in overview_topics if topic["status"] == status_filter]
-    overview_topics.sort(key=lambda topic: topic["id"])
-    overview_topics.sort(key=lambda topic: topic.get("last_activity_ts") or "", reverse=True)
-    if args.limit:
-        overview_topics = overview_topics[: args.limit]
+    overview_topics = sort_topic_rows(overview_topics)
 
-    topic_rows: list[dict[str, Any]] = []
+    topic_rows_all: list[dict[str, Any]] = []
     for topic in overview_topics:
         topic_id = topic["id"]
         topic_messages = messages_by_topic.get(topic_id, [])
@@ -434,7 +478,7 @@ def build_view_model(args: argparse.Namespace, state: dict[str, Any]) -> dict[st
                 for message in topic_messages
                 if int(message.get("id", 0)) > cursor and message_visible_to_participant(message, participant_filter)
             )
-        topic_rows.append(
+        topic_rows_all.append(
             {
                 **topic,
                 "message_count": len(topic_messages),
@@ -444,6 +488,23 @@ def build_view_model(args: argparse.Namespace, state: dict[str, Any]) -> dict[st
                 "cursor": cursor,
             }
         )
+
+    resolved_topic_id = None
+    extra_state_messages: list[str] = []
+    if latest_topic:
+        resolved_topic_id = resolve_latest_topic(topic_rows_all, participant_filter)
+        if resolved_topic_id:
+            topic_filter = resolved_topic_id
+        else:
+            extra_state_messages.append(
+                f"No matching topic for --latest-topic and participant {participant_filter} with status {status_filter}."
+            )
+
+    topic_rows = topic_rows_all
+    if unread_only:
+        topic_rows = [topic for topic in topic_rows if int(topic.get("unread_count") or 0) > 0]
+    if args.limit:
+        topic_rows = topic_rows[: args.limit]
 
     selected_topic = coerce_topic_record(topic_filter, topic_map.get(topic_filter)) if topic_filter else None
     if topic_filter and topic_filter not in topic_map:
@@ -486,7 +547,10 @@ def build_view_model(args: argparse.Namespace, state: dict[str, Any]) -> dict[st
         "cursor": selected_cursor,
         "unread_count": selected_unread_count,
         "status": room_status,
-        "state_messages": state_messages(state),
+        "state_messages": state_messages(state) + extra_state_messages,
+        "unread_only": unread_only,
+        "latest_topic_requested": latest_topic,
+        "suggested_topic_id": resolve_latest_topic(topic_rows, participant_filter),
     }
 
 
@@ -505,19 +569,36 @@ def render_topic_row(topic: dict[str, Any], participant_filter: str, width: int)
     )
 
 
+def render_view_header(args: argparse.Namespace, view: dict[str, Any]) -> str:
+    if view["mode"] == "topic":
+        parts = [
+            f"View: topic {view['topic_filter']}",
+            f"Participant: {view['participant_filter'] or 'none'}",
+        ]
+        if view["latest_topic_requested"]:
+            parts.append("Opened via latest-topic")
+        parts.append(f"Format: {args.format}")
+        return " | ".join(parts)
+
+    parts = [
+        "View: overview",
+        f"Status: {view['status_filter']}",
+        f"Participant: {view['participant_filter'] or 'none'}",
+    ]
+    if view["unread_only"]:
+        parts.append("Unread only")
+    if view["latest_topic_requested"]:
+        parts.append("Latest topic")
+    parts.append(f"Format: {args.format}")
+    return " | ".join(parts)
+
+
 def render_text_lines(args: argparse.Namespace, view: dict[str, Any], width: int) -> list[str]:
     lines = [
         "Agent Chatroom Monitor",
         fit(f"Repo: {ROOT}", width),
     ]
-    if view["mode"] == "topic":
-        lines.append(
-            f"View: topic {view['topic_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
-        )
-    else:
-        lines.append(
-            f"View: overview | Status filter: {view['status_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
-        )
+    lines.append(render_view_header(args, view))
     lines.append(
         fit(
             (
@@ -540,6 +621,7 @@ def render_text_lines(args: argparse.Namespace, view: dict[str, Any], width: int
         else:
             for topic in view["topics"]:
                 lines.append(render_topic_row(topic, view["participant_filter"] or "", width))
+            lines.extend(fit(line, width) for line in overview_command_hints(args, view))
     else:
         topic = view["topic"]
         if not topic:
@@ -625,14 +707,7 @@ def print_live_header(args: argparse.Namespace, state: dict[str, Any], width: in
         "Agent Chatroom Monitor",
         fit(f"Repo: {ROOT}", width),
     ]
-    if view["mode"] == "topic":
-        lines.append(
-            f"View: topic {view['topic_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
-        )
-    else:
-        lines.append(
-            f"View: overview | Status filter: {view['status_filter']} | Participant filter: {view['participant_filter'] or 'none'} | Format: {args.format}"
-        )
+    lines.append(render_view_header(args, view))
     lines.append("-" * min(width, 80))
     lines.extend(live_status_lines(args, state, width))
     lines.append("-" * min(width, 80))
@@ -645,6 +720,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval in seconds.")
     parser.add_argument("--participant", default="", help="Show participant-aware unread counts and visibility filtering.")
     parser.add_argument("--topic", default="", help="Show a single topic in detail.")
+    parser.add_argument(
+        "--unread-only",
+        action="store_true",
+        help="In participant overview mode, show only topics with visible unread messages.",
+    )
+    parser.add_argument(
+        "--latest-topic",
+        action="store_true",
+        help="For a participant, open the most relevant topic by preferring the latest unread topic.",
+    )
     parser.add_argument(
         "--status",
         choices=("open", "closed", "all"),
@@ -664,12 +749,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    if args.limit < 1:
-        raise ValueError("--limit must be >= 1")
-    if args.interval <= 0:
-        raise ValueError("--interval must be > 0")
     args.participant = args.participant.strip()
     args.topic = args.topic.strip()
+    validate_args(args)
     cache: dict[str, Any] = {
         "participants_sig": None,
         "topics_sig": None,

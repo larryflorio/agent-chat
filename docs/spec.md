@@ -671,6 +671,9 @@ Recommended viewer behavior:
 - overview mode shows open topics, last activity, latest summary snippets, and participant presence
 - topic mode shows the chosen topic metadata, latest summary, and recent messages
 - `--participant <name>` narrows the visible message set within the selected topic or topic overview
+- `--unread-only` is an overview convenience that filters the topic list to entries with unread messages for that participant
+- `--latest-topic` is a navigation convenience that may resolve the most relevant topic for that participant before rendering topic mode
+- these conveniences do not change the underlying contract: overview mode remains topic-oriented, topic mode remains one-topic-at-a-time, and the viewer remains read-only
 
 ## Error Handling
 

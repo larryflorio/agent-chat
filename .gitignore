@@ -1,4 +1,5 @@
 .chatroom/
+.chatroom_v2/
 AGENTS.local.md
 .pytest_cache/
 .claude/

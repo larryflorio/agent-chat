@@ -26,6 +26,14 @@ MESSAGES_PATH = CHATROOM_DIR / "messages.jsonl"
 PARTICIPANTS_PATH = CHATROOM_DIR / "participants.json"
 
 
+def file_signature(path: Path) -> tuple[bool, int | None, int | None]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return False, None, None
+    return True, stat.st_mtime_ns, stat.st_size
+
+
 @contextmanager
 def locked_file(path: Path) -> Iterator[Any]:
     with path.open("r", encoding="utf-8") as fp:
@@ -60,7 +68,7 @@ def load_participants() -> tuple[list[dict[str, str]], str | None]:
     return participants, None
 
 
-def load_messages(limit: int, participant: str) -> tuple[list[dict[str, Any]], int, str | None, str | None]:
+def load_messages(limit: int, participant: str, since_id: int = 0) -> tuple[list[dict[str, Any]], int, str | None, str | None]:
     if not MESSAGES_PATH.exists():
         return [], 0, None, None
     total_count = 0
@@ -77,9 +85,13 @@ def load_messages(limit: int, participant: str) -> tuple[list[dict[str, Any]], i
                 last_activity_ts = message["ts"]
                 if participant and message["to"] not in {"all", participant}:
                     continue
+                if message["id"] <= since_id:
+                    continue
                 filtered.append(message)
     except (FileNotFoundError, OSError, json.JSONDecodeError, ValueError, KeyError) as exc:
         return [], 0, None, f"messages.jsonl error: {exc}"
+    if since_id:
+        return filtered, total_count, last_activity_ts, None
     return filtered[-limit:], total_count, last_activity_ts, None
 
 
@@ -115,17 +127,44 @@ def render_messages(messages: list[dict[str, Any]], width: int) -> list[str]:
     return lines
 
 
-def frame(args: argparse.Namespace) -> str:
+def load_cached_state(args: argparse.Namespace, cache: dict[str, Any]) -> dict[str, Any]:
+    participants_sig = file_signature(PARTICIPANTS_PATH)
+    if participants_sig != cache.get("participants_sig"):
+        participants, participants_error = load_participants()
+        cache["participants_sig"] = participants_sig
+        cache["participants"] = participants
+        cache["participants_error"] = participants_error
+
+    messages_sig = file_signature(MESSAGES_PATH)
+    if messages_sig != cache.get("messages_sig"):
+        messages, total_count, last_activity_ts, messages_error = load_messages(args.limit, args.participant)
+        cache["messages_sig"] = messages_sig
+        cache["messages"] = messages
+        cache["total_count"] = total_count
+        cache["last_activity_ts"] = last_activity_ts
+        cache["messages_error"] = messages_error
+
+    return cache
+
+
+def state_messages(state: dict[str, Any]) -> list[str]:
+    messages: list[str] = []
+    if not CHATROOM_DIR.exists():
+        messages.append("Waiting for chatroom initialization...")
+    for error in (state["participants_error"], state["messages_error"]):
+        if error:
+            messages.append(error)
+    return messages
+
+
+def snapshot_frame(args: argparse.Namespace, state: dict[str, Any]) -> str:
     width = shutil.get_terminal_size((100, 24)).columns
     participant_filter = args.participant or "none"
-    participants, participants_error = load_participants()
-    messages, total_count, last_activity_ts, messages_error = load_messages(args.limit, args.participant)
-    state_messages: list[str] = []
-    if not CHATROOM_DIR.exists():
-        state_messages.append("Waiting for chatroom initialization...")
-    for error in (participants_error, messages_error):
-        if error:
-            state_messages.append(error)
+    participants = state["participants"]
+    messages = state["messages"]
+    total_count = state["total_count"]
+    last_activity_ts = state["last_activity_ts"]
+    current_state_messages = state_messages(state)
     lines = [
         "Agent Chatroom Monitor",
         fit(f"Repo: {ROOT}", width),
@@ -133,8 +172,8 @@ def frame(args: argparse.Namespace) -> str:
         f"Participants: {len(participants)} | Messages: {total_count} | Last activity: {last_activity_ts or 'none'}",
         "-" * min(width, 80),
     ]
-    lines.extend(fit(f"State: {message}", width) for message in state_messages)
-    if state_messages:
+    lines.extend(fit(f"State: {message}", width) for message in current_state_messages)
+    if current_state_messages:
         lines.append("-" * min(width, 80))
     lines.extend(render_participants(participants, width))
     lines.append("-" * min(width, 80))
@@ -145,10 +184,39 @@ def frame(args: argparse.Namespace) -> str:
     return "\x1b[2J\x1b[H" + "\n".join(lines)
 
 
+def live_status_lines(args: argparse.Namespace, state: dict[str, Any], width: int) -> list[str]:
+    lines = [
+        fit(
+            (
+                f"Status | Participants: {len(state['participants'])} | Messages: {state['total_count']} | "
+                f"Last activity: {state['last_activity_ts'] or 'none'}"
+            ),
+            width,
+        )
+    ]
+    lines.extend(fit(f"State | {message}", width) for message in state_messages(state))
+    lines.extend(fit(line, width) for line in render_participants(state["participants"], width))
+    return lines
+
+
+def print_live_header(args: argparse.Namespace, state: dict[str, Any], width: int) -> None:
+    participant_filter = args.participant or "none"
+    lines = [
+        "Agent Chatroom Monitor",
+        fit(f"Repo: {ROOT}", width),
+        f"Refresh: {args.interval:.1f}s | Participant filter: {participant_filter}",
+        "Follow mode: appending new messages only. Ctrl-C to exit.",
+        "-" * min(width, 80),
+    ]
+    lines.extend(live_status_lines(args, state, width))
+    lines.append("-" * min(width, 80))
+    print("\n".join(lines), flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only terminal monitor for the agent chatroom.")
     parser.add_argument("--limit", type=int, default=30, help="Number of recent messages to display.")
-    parser.add_argument("--interval", type=float, default=1.0, help="Refresh interval in seconds.")
+    parser.add_argument("--interval", type=float, default=2.0, help="Refresh interval in seconds.")
     parser.add_argument(
         "--participant",
         default="",
@@ -161,13 +229,63 @@ def main() -> None:
     if args.interval <= 0:
         raise ValueError("--interval must be > 0")
     args.participant = args.participant.strip()
+    cache: dict[str, Any] = {
+        "participants_sig": None,
+        "participants": [],
+        "participants_error": None,
+        "messages_sig": None,
+        "messages": [],
+        "total_count": 0,
+        "last_activity_ts": None,
+        "messages_error": None,
+    }
+    state = load_cached_state(args, cache)
+    if args.once:
+        print(snapshot_frame(args, state), end="", flush=True)
+        print()
+        return
+    width = shutil.get_terminal_size((100, 24)).columns
+    print_live_header(args, state, width)
+    initial_messages = state["messages"]
+    if initial_messages:
+        print("\n".join(render_messages(initial_messages, width)), flush=True)
+    else:
+        print("No messages yet.", flush=True)
+    last_rendered_message_id = initial_messages[-1]["id"] if initial_messages else 0
+    last_participants_sig = state["participants_sig"]
+    last_messages_sig = state["messages_sig"]
+    last_status_lines = live_status_lines(args, state, width)
+    unchanged_polls = 0
     try:
         while True:
-            print(frame(args), end="", flush=True)
-            if args.once:
-                print()
-                return
-            time.sleep(args.interval)
+            width = shutil.get_terminal_size((100, 24)).columns
+            state = load_cached_state(args, cache)
+            changed = False
+            current_status_lines = live_status_lines(args, state, width)
+            if state["participants_sig"] != last_participants_sig or current_status_lines != last_status_lines:
+                print("\n".join(current_status_lines), flush=True)
+                last_participants_sig = state["participants_sig"]
+                last_status_lines = current_status_lines
+                changed = True
+            if state["messages_sig"] != last_messages_sig:
+                new_messages, _, _, new_messages_error = load_messages(args.limit, args.participant, since_id=last_rendered_message_id)
+                last_messages_sig = state["messages_sig"]
+                if new_messages_error:
+                    error_line = fit(f"State | {new_messages_error}", width)
+                    if error_line not in last_status_lines:
+                        print(error_line, flush=True)
+                        last_status_lines = [*last_status_lines, error_line]
+                    changed = True
+                elif new_messages:
+                    print("\n".join(render_messages(new_messages, width)), flush=True)
+                    last_rendered_message_id = new_messages[-1]["id"]
+                    changed = True
+            if changed:
+                unchanged_polls = 0
+            else:
+                unchanged_polls += 1
+            sleep_for = args.interval if changed else min(args.interval * (2 ** min(unchanged_polls, 3)), 5.0)
+            time.sleep(sleep_for)
     except KeyboardInterrupt:
         print()
 

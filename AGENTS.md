@@ -40,6 +40,15 @@ When working through the repository chatroom, follow the normal flow:
 - Write a handoff with `write_summary` when passing work across sessions.
 - Call `leave` when done.
 
+For changes affecting persistence, locking, tool semantics, or cross-process behavior:
+
+- use `[proposal]` for the initial direction
+- use `[review]` for critique focused on correctness, risk, and tests
+- use `[decision]` when a direction is chosen
+- use `[handoff]` in `write_summary` only for the final synthesized state
+
+Prefer at least one substantive review before a decision on non-trivial changes.
+
 ## Testing Guidelines
 
 Tests live under `tests/` and should use the `test_*.py` naming pattern. Prioritize behavior that can regress quietly: file locking, message ID assignment, participant rejoin/leave behavior, cursor updates, summary retrieval, and filtering in `read_messages` and `read_unread`.

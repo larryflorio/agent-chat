@@ -45,6 +45,50 @@ python3 -m pip install mcp
 
 This is local-only. No network transport, auth, or encryption.
 
+## Structured Deliberation Conventions
+
+For non-trivial design or implementation work, use the chatroom as a staged discussion log rather than a flat stream of status updates.
+
+These stages are conventions in message content only. The server does not interpret them specially.
+
+Suggested message prefixes:
+
+- `[proposal]` initial plan, diagnosis, or patch direction
+- `[review]` critique of a proposal
+- `[decision]` chosen direction
+- `[blocker]` unresolved issue preventing progress
+- `[handoff]` final cross-session summary
+
+Recommended flow for non-trivial work:
+
+1. Post one `[proposal]`
+2. Collect one or more `[review]` messages
+3. Post one `[decision]`
+4. If the work spans sessions, write one `[handoff]` summary with `write_summary`
+
+Review against:
+
+- correctness
+- spec compliance
+- regression risk
+- concurrency and locking impact
+- testing needed
+
+Example:
+
+```python
+send_message("alice", "[proposal] Keep v1 participant identity name-based. Add documentation and tests for stale participant recovery instead of changing persistence semantics.")
+send_message("bob", "[review] Correct direction. Adding heuristic stale-session detection now would change failure semantics and complicate cross-process coordination.")
+send_message("alice", "[decision] Preserve current v1 semantics. Document manual stale-participant cleanup and add coverage for rejoin and leave behavior.")
+write_summary("alice", "[handoff] Decided not to introduce session ids or heartbeat recovery in v1. Current model remains name-owned, process-local, and explicitly cleaned up.")
+```
+
+Use the tools at different levels of fidelity:
+
+- `send_message`: discussion, proposals, critique, blockers
+- `write_summary`: final synthesis or handoff
+- `get_handoff`: compact resume state
+
 ## Requirements
 
 - Python 3
@@ -121,6 +165,15 @@ When using the `chatroom` MCP server for multi-agent work:
 - Instruct every participating agent to check the chatroom and act on relevant messages; joining alone does not create an automatic relay or response loop.
 
 Use the chatroom for ownership, status, blockers, and handoffs. Keep messages compact.
+
+For changes affecting persistence, locking, tool semantics, or cross-process behavior:
+
+- use `[proposal]` for the initial direction
+- use `[review]` for critique focused on correctness, risk, and tests
+- use `[decision]` when a direction is chosen
+- use `[handoff]` in `write_summary` only for the final synthesized state
+
+Prefer at least one substantive review before a decision on non-trivial changes.
 ```
 
 Suggested `CLAUDE.md` snippet for a consuming repository:
@@ -169,7 +222,7 @@ python3 chatroom_monitor.py --interval 0.5
 python3 chatroom_monitor.py --once
 ```
 
-The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks and redraws the terminal in place. It does not modify chatroom state.
+The monitor reads `.chatroom/messages.jsonl` and `.chatroom/participants.json` under shared locks. In normal operation it prints an initial snapshot and then appends only newly visible messages plus compact status updates; `--once` renders a single full-screen snapshot. It does not modify chatroom state.
 
 ### Quick Check
 
@@ -355,3 +408,4 @@ Returns the preferred compact orientation payload for a new or resumed session:
 - [`SPEC.md`](./SPEC.md)
 - [`ROADMAP.md`](./ROADMAP.md)
 - [`tests/test_chatroom_mcp_server.py`](./tests/test_chatroom_mcp_server.py)
+- [`tests/test_chatroom_monitor.py`](./tests/test_chatroom_monitor.py)

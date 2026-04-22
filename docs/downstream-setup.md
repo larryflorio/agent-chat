@@ -13,6 +13,12 @@ The exact configuration syntax is client-specific, but any client that supports 
 
 The consuming repository's own instruction files control agent behavior. Agents there will not automatically inherit this repository's `AGENTS.md`.
 
+## Security Guidance
+
+Configure the MCP launch command as trusted static repository configuration. Do not let prompts, chatroom messages, UI fields, web requests, marketplace imports, or other untrusted input choose the stdio `command`, `args`, `transport`, or environment for this server.
+
+This chatroom server is local-only and does not launch other MCP servers. If a consuming repository wraps it in a network service, that wrapper must supply its own protections, including localhost binding by default, authentication for non-local use, browser `Origin` validation, and tenant isolation for `.chatroom_v2/` state.
+
 ## Suggested `AGENTS.md` Snippet
 
 ```md

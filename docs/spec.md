@@ -29,6 +29,14 @@ The server must let agents:
 
 The server is local-only. It is not a network service.
 
+## Security Model
+
+The server is an MCP server, not an MCP client or MCP server launcher. It must not accept tool input or chatroom state that defines another MCP server's `command`, `args`, `transport`, environment, or launch parameters, and it must not execute subprocesses from such input.
+
+The only supported transport is stdio, where the MCP client launches `chatroom_mcp_server.py` from trusted static configuration. Downstream consumers must not derive that launch configuration from prompts, chat messages, web requests, marketplace entries, or other untrusted input.
+
+If a future version adds Streamable HTTP or another network transport, that transport must bind to localhost by default, validate browser `Origin` headers, and require authentication before non-local use. Network exposure is outside the v2 server's current security boundary.
+
 ## Required Output
 
 Produce the MCP server runtime in the repository root as:

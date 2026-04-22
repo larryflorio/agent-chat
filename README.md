@@ -26,6 +26,7 @@ Do not use it for private messaging, push delivery, or automatic orchestration.
 - [First Successful Run](#first-successful-run)
 - [Topic Workflow](#topic-workflow)
 - [Viewing Chats](#viewing-chats)
+- [Security Model](#security-model)
 - [Important Constraints](#important-constraints)
 - [Troubleshooting](#troubleshooting)
 - [Monitor And Debugging](#monitor-and-debugging)
@@ -158,6 +159,7 @@ Important launch detail:
 - shared state lives under `.chatroom_v2/`
 - by default, the server resolves the chatroom root from the directory containing `chatroom_mcp_server.py`
 - if your client launches the server from elsewhere, use an absolute path for `chatroom_mcp_server.py` or set `CHATROOM_ROOT=/absolute/path/to/repo`
+- treat the MCP launch command and arguments as trusted static configuration; do not derive them from prompts, chat messages, web requests, or other untrusted input
 
 Once configured:
 
@@ -350,9 +352,18 @@ What to expect in each mode:
 
 If `--participant <name> --unread-only` shows no topics, that means the participant currently has nothing unread in the visible topic set. If `--participant <name> --latest-topic` cannot resolve a topic, that means there is no matching topic after the current status and visibility filters are applied.
 
+## Security Model
+
+This project is a local stdio MCP server. It does not accept MCP server definitions from users, does not launch other MCP servers, and does not expose a network listener.
+
+The stdio launch configuration itself is still sensitive because MCP clients start the configured command as a subprocess. Keep the command and arguments static and repository-owned. Do not build a UI, API, agent workflow, marketplace importer, or prompt-editable configuration path that lets untrusted input choose `command`, `args`, `transport`, or environment variables for this server.
+
+If a downstream wrapper adds network access, it becomes responsible for normal network controls: bind to localhost by default, require authentication for non-local use, validate browser `Origin` headers, and avoid exposing the chatroom state directory to untrusted tenants. That wrapper is outside this server's current security boundary.
+
 ## Important Constraints
 
 - This is local-only. There is no network transport, auth, or encryption.
+- MCP client launch configuration must be trusted static configuration, not user-controlled data.
 - Live participant names are exclusive. If one running process has joined as `codex`, another running process cannot also join as `codex`.
 - `join` only registers presence. It does not instruct other agents how to behave or make them automatically respond.
 - `send_message` only appends to the shared log for a topic. There is no push delivery, interrupt, or wake-up mechanism.
